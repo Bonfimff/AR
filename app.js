@@ -12,6 +12,7 @@ const ui = {
   depthBadge: document.getElementById("depth-badge"),
   diagPanel: document.getElementById("diag-panel"),
   diagBtn: document.getElementById("diag-btn"),
+  depthBtn: document.getElementById("depth-btn"),
   repositionBtn: document.getElementById("reposition-btn"),
   exitBtn: document.getElementById("exit-ar-btn"),
 };
@@ -36,8 +37,12 @@ function showDepthStatus(status) {
   ui.depthBadge.hidden = false;
   ui.depthBadge.textContent = status.active
     ? "Oclusão por profundidade ativa"
-    : "Sem oclusão por profundidade";
+    : status.enabled
+      ? `Profundidade negociada (${status.usage})`
+      : "Sem oclusão por profundidade";
   ui.depthBadge.classList.toggle("is-off", !status.active);
+  // O visualizador só existe no caminho CPU, que é o que desenhamos aqui.
+  if (status.cpu) ui.depthBtn.hidden = false;
   depthBadgeTimer = setTimeout(() => {
     ui.depthBadge.hidden = true;
   }, 4000);
@@ -77,6 +82,8 @@ async function startAR() {
       ui.depthBadge.hidden = true;
       diagnostics.setVisible(false);
       ui.diagBtn.classList.remove("is-on");
+      ui.depthBtn.hidden = true;
+      ui.depthBtn.classList.remove("is-on");
       ui.hud.hidden = true;
       ui.repositionBtn.hidden = true;
       ui.startScreen.hidden = false;
@@ -113,6 +120,10 @@ async function init() {
   diagnostics = new Diagnostics(ui.diagPanel);
   ui.diagBtn.addEventListener("click", () => {
     ui.diagBtn.classList.toggle("is-on", diagnostics.toggle());
+  });
+
+  ui.depthBtn.addEventListener("click", () => {
+    ui.depthBtn.classList.toggle("is-on", experience?.toggleDepthDebug() ?? false);
   });
 
   ui.startBtn.addEventListener("click", startAR);

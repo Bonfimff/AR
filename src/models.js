@@ -22,6 +22,9 @@ export const MODELS = {
     // 0,40 m de profundidade; a maçaneta projeta ~7 cm à frente).
     dimensions: { width: 0.8, height: 2.0, depth: 0.47 },
     fitToDimensions: true,
+    // O caminho do GLB não muda quando o modelo muda, então o navegador serve
+    // a versão antiga do cache. Incremente ao substituir o arquivo.
+    version: 2,
   },
 };
 

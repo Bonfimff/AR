@@ -1,7 +1,12 @@
 import * as THREE from "three";
 import { loadEquipment, createSelectionIndicator, disposeObject } from "./equipment.js";
 import { GestureController } from "./gestures.js";
-import { DEPTH_SENSING_INIT, inspectDepthSensing, isOcclusionLive } from "./occlusion.js";
+import {
+  DEPTH_SENSING_INIT,
+  inspectDepthSensing,
+  isOcclusionLive,
+  CpuDepthOcclusion,
+} from "./occlusion.js";
 import { getModel } from "./models.js";
 import { createHandProvider } from "./hand/index.js";
 import { HandController, HAND_STATE } from "./hand-controller.js";
@@ -52,6 +57,7 @@ export class ARExperience {
 
     this.handProvider = null;
     this.handController = null;
+    this.cpuOcclusion = null;
     this.fps = new FpsMeter();
   }
 
@@ -85,7 +91,14 @@ export class ARExperience {
     this.renderer.xr.setReferenceSpaceType("local");
     await this.renderer.xr.setSession(this.session);
 
-    this.depthStatus = inspectDepthSensing(this.session, this.renderer);
+    this.depthStatus = inspectDepthSensing(this.session);
+
+    // O Three.js só cobre o modo gpu-optimized; no modo cpu fazemos o passe.
+    if (this.depthStatus.enabled && this.depthStatus.usage === "cpu-optimized") {
+      this.cpuOcclusion = new CpuDepthOcclusion();
+      this.scene.add(this.cpuOcclusion.mesh);
+    }
+    this.depthStatus.cpu = Boolean(this.cpuOcclusion);
     console.info("[AR] depth-sensing:", this.depthStatus);
     this.onDepthStatus?.(this.depthStatus);
 
@@ -106,6 +119,14 @@ export class ARExperience {
     await this.setupHandTracking();
     this.onStatus("Aponte para uma superfície e toque para posicionar");
     this.renderer.setAnimationLoop((time, frame) => this.render(time, frame));
+  }
+
+  /** Liga/desliga a visualização do mapa de profundidade (só no caminho CPU). */
+  toggleDepthDebug() {
+    if (!this.cpuOcclusion) return false;
+    this.depthDebug = !this.depthDebug;
+    this.cpuOcclusion.setDebug(this.depthDebug);
+    return this.depthDebug;
   }
 
   /** Hand tracking é opcional: se falhar, a experiência segue no touchscreen. */
@@ -319,10 +340,13 @@ export class ARExperience {
   }
 
   render(time, frame) {
+    this.currentFrame = frame;
     const delta = this.lastFrameTime ? Math.min((time - this.lastFrameTime) / 1000, 0.1) : 0;
     this.lastFrameTime = time;
 
     if (frame) {
+      const view = frame.getViewerPose(this.referenceSpace)?.views?.[0] ?? null;
+
       if (this.awaitingPlacement) {
         // O hit-test só é consultado enquanto há algo a posicionar.
         const results = this.hitTestSource ? frame.getHitTestResults(this.hitTestSource) : [];
@@ -342,11 +366,13 @@ export class ARExperience {
           }
         }
         this.gestures?.update(delta);
-        this.updateHand(frame, time, delta);
+        this.updateHand(view, time, delta);
       }
 
+      this.cpuOcclusion?.update(frame, view, this.getXRCamera(), this.renderer);
+
       // A textura de profundidade só chega alguns frames depois do início.
-      if (!this.occlusionLive && isOcclusionLive(this.renderer)) {
+      if (!this.occlusionLive && isOcclusionLive(this.renderer, this.cpuOcclusion)) {
         this.occlusionLive = true;
         this.onDepthStatus?.({ ...this.depthStatus, active: true, live: true });
       }
@@ -361,15 +387,15 @@ export class ARExperience {
    * O controlador de mão só roda quando não há dedo na tela: o toque tem
    * prioridade, para que os dois nunca disputem o mesmo objeto.
    */
-  updateHand(frame, time, delta) {
+  updateHand(view, time, delta) {
     if (!this.handProvider || !this.handController) return;
     if (this.gestures?.pointers.size > 0) return;
 
     const points = this.handProvider.update({
-      frame,
+      frame: this.currentFrame,
       referenceSpace: this.referenceSpace,
       camera: this.getXRCamera(),
-      xrCamera: this.getXRCamera(),
+      xrCamera: view?.camera ?? null, // XRCamera do WebXR, não a do Three.js
       time: time / 1000,
     });
     this.handController.update(points, time / 1000, delta);
@@ -384,10 +410,16 @@ export class ARExperience {
         hitTest: this.hitTestSource ? "ON" : "OFF",
         hand: (this.handProvider?.kind ?? "off").toUpperCase(),
         depth: this.occlusionLive
-          ? "ACTIVE"
+          ? `ACTIVE ${this.depthStatus?.gpu ? "GPU" : "CPU"}`
           : this.depthStatus?.enabled
-            ? "ENABLED"
+            ? `ENABLED ${this.depthStatus.usage ?? ""}`
             : "UNSUPPORTED",
+        camera: this.handProvider?.hasCameraTexture
+          ? "TEXTURE OK"
+          : this.handProvider?.kind === "mediapipe"
+            ? "NO TEXTURE"
+            : "—",
+        infer: this.handProvider?.inferences ?? 0,
         handDetected: hand ? "DETECTED" : "NOT DETECTED",
         pinch: hand?.pinching ? "ON" : "OFF",
         object: this.selected ? "SELECTED" : "FREE",
@@ -421,6 +453,8 @@ export class ARExperience {
 
     this.handController?.dispose();
     this.handController = null;
+    this.cpuOcclusion?.dispose();
+    this.cpuOcclusion = null;
     this.handProvider?.dispose();
     this.handProvider = null;
 

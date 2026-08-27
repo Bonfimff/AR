@@ -7,6 +7,8 @@ const ROWS = [
   ["hitTest", "HIT TEST"],
   ["hand", "HAND TRACKING"],
   ["depth", "DEPTH"],
+  ["camera", "CAM FRAME"],
+  ["infer", "INFERENCIAS"],
   ["handDetected", "HAND"],
   ["pinch", "PINCH"],
   ["object", "OBJECT"],

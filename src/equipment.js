@@ -7,10 +7,11 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
  * (o GLB deve estar modelado em metros, como manda a convenção glTF).
  */
 export async function loadEquipment(entry) {
-  const { url, dimensions, fitToDimensions } = typeof entry === "string" ? { url: entry } : entry;
+  const { url, dimensions, fitToDimensions, version } =
+    typeof entry === "string" ? { url: entry } : entry;
 
   const loader = new GLTFLoader();
-  const gltf = await loader.loadAsync(url);
+  const gltf = await loader.loadAsync(version ? `${url}?v=${version}` : url);
 
   const model = gltf.scene;
   let box = new THREE.Box3().setFromObject(model);

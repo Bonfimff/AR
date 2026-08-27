@@ -53,6 +53,11 @@ export class MediaPipeHandProvider {
     this.lastInference = 0;
     this.lastTimestamp = 0;
     this.failure = null;
+
+    // Diagnóstico: sem isto não dá para saber, no aparelho, se o problema é a
+    // textura da câmera, a inferência ou o gesto.
+    this.hasCameraTexture = false;
+    this.inferences = 0;
   }
 
   async init() {
@@ -116,7 +121,12 @@ export class MediaPipeHandProvider {
   }
 
   capture(xrCamera, now) {
-    const texture = this.renderer.xr.getCameraTexture?.(xrCamera);
+    // ATENÇÃO: o argumento tem de ser o XRCamera do XRView (view.camera), NÃO a
+    // câmera do Three.js. O renderer guarda as texturas num objeto comum
+    // indexado pelo próprio XRCamera, então uma chave de outro tipo simplesmente
+    // não encontra nada — e o MediaPipe nunca recebe um frame.
+    const texture = xrCamera ? this.renderer.xr.getCameraTexture?.(xrCamera) : null;
+    this.hasCameraTexture = Boolean(texture);
     if (!texture) return;
 
     this.busy = true;
@@ -163,6 +173,7 @@ export class MediaPipeHandProvider {
 
     const result = this.landmarker.detectForVideo(this.canvas, timestamp);
     this.points = result?.landmarks?.[0]?.length ? result.landmarks[0] : null;
+    this.inferences += 1;
   }
 
   dispose() {

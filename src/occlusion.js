@@ -1,56 +1,216 @@
+import * as THREE from "three";
+
 /**
  * Oclusão por profundidade (WebXR Depth Sensing).
  *
- * API REAL utilizada — verificada contra a implementação do Three.js r185
- * (WebXRDepthSensing) e a spec do WebXR Depth Sensing Module:
+ * DOIS CAMINHOS, porque o dispositivo decide qual oferece:
  *
- *   1. requestSession(... { depthSensing: { usagePreference, dataFormatPreference } })
- *   2. session.enabledFeatures.includes("depth-sensing")
- *   3. session.depthUsage === "gpu-optimized"
- *   4. XRWebGLBinding.getDepthInformation(view) -> textura de profundidade
- *   5. o Three.js desenha um quad com renderOrder -Infinity cujo fragment shader
- *      escreve gl_FragDepth a partir dessa textura. Tudo que for renderizado
- *      depois é testado contra a profundidade REAL do ambiente.
+ *   gpu-optimized -> o próprio Three.js desenha um quad com renderOrder
+ *                    -Infinity cujo shader escreve gl_FragDepth a partir da
+ *                    textura de profundidade (WebXRDepthSensing).
+ *   cpu-optimized -> o buffer chega como ArrayBuffer; subimos como textura e
+ *                    fazemos a mesma escrita de gl_FragDepth aqui
+ *                    (CpuDepthOcclusion abaixo).
  *
- * Só pedimos "gpu-optimized": é o único modo que o renderer usa para oclusão.
- * Pedir "cpu-optimized" habilitaria a feature sem produzir oclusão alguma —
- * daria um falso positivo no diagnóstico.
+ * Pedir apenas gpu-optimized foi um erro da versão anterior: depth-sensing é uma
+ * feature OPCIONAL, e uma preferência que o aparelho não atende faz a feature
+ * inteira ser descartada — o painel mostrava DEPTH: UNSUPPORTED sem que desse
+ * para saber se era falta de suporte ou preferência incompatível.
  *
- * FALLBACK (explícito): depth-sensing entra como optionalFeature. Se o
- * dispositivo/navegador não oferecer, a sessão AR inicia normalmente e a
- * experiência segue idêntica à V1, apenas sem oclusão. NÃO há simulação por
- * visão computacional, nem recorte falso, nem plano de máscara.
+ * FALLBACK (explícito): se nem assim a feature for concedida, a AR roda igual,
+ * sem oclusão. Nenhuma simulação, nenhum recorte falso.
  */
 
-/** Dicionário passado ao requestSession quando pedimos depth-sensing. */
 export const DEPTH_SENSING_INIT = {
-  usagePreference: ["gpu-optimized"],
+  usagePreference: ["gpu-optimized", "cpu-optimized"],
   dataFormatPreference: ["luminance-alpha", "float32"],
 };
 
-/**
- * Lê o estado real da oclusão após a sessão ter iniciado.
- * Nada aqui é chamado por frame.
- */
-export function inspectDepthSensing(session, renderer) {
-  const requested = typeof XRWebGLBinding !== "undefined";
+/** Lê o estado real da oclusão depois que a sessão iniciou. Não roda por frame. */
+export function inspectDepthSensing(session) {
   const enabled = Boolean(session.enabledFeatures?.includes("depth-sensing"));
   const usage = enabled ? session.depthUsage : null;
   const format = enabled ? session.depthDataFormat : null;
 
-  // hasDepthSensing() só passa a responder true depois do primeiro frame em que
-  // a textura de profundidade chega, por isso o estado final é reavaliado no loop.
-  const active = enabled && usage === "gpu-optimized";
-
   let reason = null;
-  if (!requested) reason = "XRWebGLBinding indisponível neste navegador";
-  else if (!enabled) reason = "o dispositivo não expôs a feature depth-sensing";
-  else if (usage !== "gpu-optimized") reason = `depthUsage retornou "${usage}"`;
+  if (typeof XRWebGLBinding === "undefined") reason = "XRWebGLBinding indisponível";
+  else if (!enabled) reason = "o dispositivo não concedeu a feature depth-sensing";
 
-  return { requested, enabled, usage, format, active, reason };
+  return { enabled, usage, format, reason, gpu: usage === "gpu-optimized" };
 }
 
-/** Confirma, já em runtime, se a textura de profundidade está de fato chegando. */
-export function isOcclusionLive(renderer) {
-  return Boolean(renderer?.xr?.hasDepthSensing?.());
+export function isOcclusionLive(renderer, cpuOcclusion) {
+  return Boolean(renderer?.xr?.hasDepthSensing?.() || cpuOcclusion?.active);
 }
+
+/**
+ * Oclusão para o modo cpu-optimized.
+ *
+ * Desenha um quad de tela cheia ANTES de tudo (renderOrder -Infinity), sem
+ * escrever cor, apenas profundidade: cada pixel recebe a profundidade real
+ * medida pelo ARCore. O que estiver virtualmente atrás disso é descartado pelo
+ * teste de profundidade — é exatamente o comportamento pedido, mão e pessoas
+ * na frente escondendo o equipamento.
+ */
+export class CpuDepthOcclusion {
+  constructor() {
+    this.active = false;
+    this.texture = null;
+    this.meters = null;
+
+    this.uniforms = {
+      depthTexture: { value: null },
+      uvTransform: { value: new THREE.Matrix4() },
+      // Viewport do XR em pixels do framebuffer, NÃO o tamanho do canvas: é a
+      // esse retângulo que gl_FragCoord se refere dentro da sessão.
+      viewport: { value: new THREE.Vector4(0, 0, 1, 1) },
+      projection: { value: new THREE.Matrix4() },
+      debug: { value: 0 },
+    };
+
+    this.mesh = new THREE.Mesh(
+      new THREE.PlaneGeometry(2, 2),
+      new THREE.RawShaderMaterial({
+        glslVersion: THREE.GLSL3,
+        uniforms: this.uniforms,
+        vertexShader: VERTEX,
+        fragmentShader: FRAGMENT,
+        // ARMADILHA DO OPENGL: com GL_DEPTH_TEST desabilitado o buffer de
+        // profundidade NÃO é atualizado, mesmo com depthWrite ligado. Para
+        // escrever sempre, o teste fica habilitado com função ALWAYS.
+        depthTest: true,
+        depthFunc: THREE.AlwaysDepth,
+        depthWrite: true, // é só isto que queremos deste passe
+        colorWrite: false, // a cor é a imagem da câmera, não mexemos nela
+      })
+    );
+    this.mesh.frustumCulled = false;
+    this.mesh.renderOrder = -Infinity;
+    this.mesh.visible = false;
+    this.mesh.name = "CpuDepthOcclusion";
+  }
+
+  /** @param {XRFrame} frame @param {XRView} view @param {THREE.Camera} camera */
+  update(frame, view, camera, renderer) {
+    this.active = false;
+    this.mesh.visible = false;
+    if (!frame || !view || !camera) return;
+
+    const info = frame.getDepthInformation?.(view);
+    if (!info || !info.data) return;
+
+    this.upload(info);
+    this.uniforms.uvTransform.value.fromArray(info.normDepthBufferFromNormView.matrix);
+    this.uniforms.projection.value.copy(camera.projectionMatrix);
+
+    if (camera.viewport) {
+      this.uniforms.viewport.value.copy(camera.viewport);
+    } else {
+      const size = renderer.getDrawingBufferSize(_size);
+      this.uniforms.viewport.value.set(0, 0, size.x, size.y);
+    }
+
+    this.mesh.visible = true;
+    this.active = true;
+  }
+
+  /** Pinta o mapa de profundidade por cima, para conferir alinhamento e escala. */
+  setDebug(on) {
+    this.uniforms.debug.value = on ? 1 : 0;
+    this.mesh.material.colorWrite = Boolean(on);
+    this.mesh.material.transparent = Boolean(on);
+    this.mesh.material.needsUpdate = true;
+  }
+
+  /**
+   * Converte o buffer bruto em metros e sobe como textura de 1 canal float.
+   * Decodificar na CPU evita depender de como cada plataforma empacota o
+   * formato luminance-alpha em 16 bits — a origem clássica de mapas de
+   * profundidade invertidos ou fora de escala.
+   */
+  upload(info) {
+    const count = info.width * info.height;
+    if (!this.meters || this.meters.length !== count) {
+      this.meters = new Float32Array(count);
+      this.texture?.dispose();
+      this.texture = new THREE.DataTexture(
+        this.meters,
+        info.width,
+        info.height,
+        THREE.RedFormat,
+        THREE.FloatType
+      );
+      this.texture.minFilter = THREE.NearestFilter;
+      this.texture.magFilter = THREE.NearestFilter;
+      this.uniforms.depthTexture.value = this.texture;
+    }
+
+    const scale = info.rawValueToMeters;
+    if (info.data.byteLength === count * 2) {
+      const raw = new Uint16Array(info.data);
+      for (let i = 0; i < count; i += 1) this.meters[i] = raw[i] * scale;
+    } else {
+      const raw = new Float32Array(info.data);
+      for (let i = 0; i < count; i += 1) this.meters[i] = raw[i] * scale;
+    }
+    this.texture.needsUpdate = true;
+  }
+
+  dispose() {
+    this.texture?.dispose();
+    this.mesh.geometry.dispose();
+    this.mesh.material.dispose();
+    this.mesh.removeFromParent();
+    this.texture = null;
+    this.meters = null;
+    this.active = false;
+  }
+}
+
+const _size = new THREE.Vector2();
+
+const VERTEX = /* glsl */ `
+in vec3 position;
+void main() {
+  gl_Position = vec4(position.xy, 0.0, 1.0);
+}
+`;
+
+const FRAGMENT = /* glsl */ `
+precision highp float;
+uniform sampler2D depthTexture;
+uniform mat4 uvTransform;
+uniform mat4 projection;
+uniform vec4 viewport;
+uniform float debug;
+out vec4 fragColor;
+
+void main() {
+  fragColor = vec4(0.0);
+
+  vec2 normView = (gl_FragCoord.xy - viewport.xy) / viewport.zw;
+  vec2 uv = (uvTransform * vec4(normView, 0.0, 1.0)).xy;
+  if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) {
+    gl_FragDepth = 1.0;
+    return;
+  }
+
+  float meters = texture(depthTexture, uv).r;
+  if (meters <= 0.0) {
+    // Sem medida para este pixel: não ocluir nada é melhor do que ocluir errado.
+    gl_FragDepth = 1.0;
+    return;
+  }
+
+  // Metros -> profundidade em NDC, usando a mesma projeção da câmera da AR.
+  float viewZ = -meters;
+  float clipZ = projection[2][2] * viewZ + projection[3][2];
+  float clipW = -viewZ;
+  gl_FragDepth = clamp(clipZ / clipW * 0.5 + 0.5, 0.0, 1.0);
+
+  if (debug > 0.5) {
+    float n = clamp(meters / 5.0, 0.0, 1.0); // perto = vermelho, longe = verde
+    fragColor = vec4(1.0 - n, n, 0.15, 0.8);
+  }
+}
+`;

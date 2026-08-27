@@ -10,13 +10,22 @@ sem login.
 index.html                     interface + importmap do Three.js
 style.css                      estilos (tela inicial e HUD da AR)
 app.js                         bootstrap, verificação de suporte, ligação da UI
-src/ar-experience.js           sessão WebXR, hit-test, âncora, seleção, loop de render
-src/gestures.js                gestos de toque (arrastar, pinça, giro, altura)
+src/ar-experience.js           AR ENGINE: sessão, hit-test, âncora, seleção, loop
 src/occlusion.js               oclusão por profundidade (WebXR Depth Sensing)
-src/models.js                  registro de modelos (preparado para expansão)
+src/gestures.js                GESTURE ENGINE (touchscreen)
+src/hand/index.js              seleção do provider de hand tracking
+src/hand/native-hand.js        HAND TRACKING via WebXR Hand Input
+src/hand/mediapipe-hand.js     HAND TRACKING via MediaPipe + camera-access
+src/hand/hand-analyzer.js      landmarks -> sinais de gesto estabilizados
+src/hand-controller.js         OBJECT CONTROLLER: máquina de estados da mão
+src/filters.js                 One Euro, histerese e debounce
+src/ray-plane.js               tela 2D -> espaço 3D da AR
+src/diagnostics.js             UI de diagnóstico + medidor de FPS
+src/models.js                  MODEL LOADER: registro e dimensões reais
 src/equipment.js               carregamento/normalização/descarte do GLB
 models/equipamento.glb         modelo — SUBSTITUA por este arquivo pelo real
-tools/make-placeholder-glb.mjs gerador do GLB de marcação (só para a POC)
+tools/make-panel-glb.mjs       gerador do quadro elétrico (modelo próprio)
+tools/make-placeholder-glb.mjs gerador do cubo simples da V1
 ```
 
 ## Dependências
@@ -29,6 +38,26 @@ A versão r185 é requisito da oclusão: o suporte a Depth Sensing (`WebXRDepthS
 
 Para hospedar offline, baixe `three.module.js` e `examples/jsm/loaders/GLTFLoader.js`
 e ajuste o `importmap` em `index.html`.
+
+## Modelo 3D
+
+O equipamento é um **quadro elétrico industrial de piso**, gerado
+proceduralmente por `tools/make-panel-glb.mjs`: 11 materiais PBR, 2316
+triângulos, 135 KB. Inclui gabinete, rodapé, porta com moldura, dobradiças,
+maçaneta, duas grelhas de ventilação, três trilhos DIN com 36 disjuntores e
+alavancas, barramentos de cobre, seis lâmpadas de sinalização, placa de
+identificação e prensa-cabos.
+
+| | |
+|---|---|
+| Nome | Quadro elétrico (procedural) |
+| Fonte | Este repositório, `tools/make-panel-glb.mjs` |
+| Licença | Mesma do projeto — **modelo próprio**, sem asset de terceiros |
+| Formato original | glTF 2.0 binário (GLB), gerado direto em código |
+| Dimensões reais | 0,80 × 2,00 × 0,47 m (a maçaneta projeta ~7 cm) |
+
+Optei por gerar o modelo em vez de baixar um de terceiros justamente para não
+deixar nenhuma dúvida de licença numa apresentação comercial.
 
 ## Substituir o modelo
 
@@ -95,6 +124,39 @@ tela informa, nos primeiros segundos, se a oclusão por profundidade ficou ativa
 
 Se algo falhar, use `chrome://inspect` para ver o console do celular.
 
+## Controle por mão
+
+| Camada | Tecnologia | Quando entra |
+|---|---|---|
+| 1 | WebXR Hand Input (`XRHand`, joint poses) | headsets (Android XR, Quest) |
+| 2 | MediaPipe Hand Landmarker + `camera-access` | Chrome Android com ARCore |
+| 3 | Touchscreen | sempre disponível, e fallback final |
+
+Gestos (com o objeto colocado, mão diante da câmera):
+
+- **🤏 pinça sobre o equipamento** — seleciona e segura;
+- **mover a mão na horizontal** — desloca sobre a superfície;
+- **afastar/aproximar polegar e indicador** — escala;
+- **girar a mão** — rotação no eixo vertical;
+- **subir/descer a mão** — altura;
+- **✋ abrir a mão** — solta; o objeto fica exatamente onde está.
+
+Cada manipulação trava em **um** modo, escolhido pelo primeiro sinal que cruza
+seu limiar. É o que impede escala e rotação involuntárias quando a mão faz
+várias coisas ao mesmo tempo. Há uma carência de 0,25 s após fechar a pinça,
+durante a qual nada é classificado — sem ela, a própria convergência dos
+filtros era lida como gesto de escala.
+
+O touchscreen tem prioridade: enquanto há um dedo na tela, o controle por mão
+fica suspenso, para que os dois nunca escrevam no mesmo transform.
+
+## Painel de diagnóstico
+
+O botão **i** no HUD mostra/esconde AR, HIT TEST, HAND TRACKING (NATIVE /
+MEDIAPIPE / OFF), DEPTH, HAND, PINCH, OBJECT, STATE e FPS. Ele diz qual camada
+está realmente ativa — nenhum fallback é silencioso. Esconda-o para a
+apresentação.
+
 ## Limitações do WebXR a observar
 
 - **Contexto seguro obrigatório**: HTTPS ou `localhost`. Sem isso, `navigator.xr` nem existe.
@@ -121,5 +183,14 @@ Se algo falhar, use `chrome://inspect` para ver o console do celular.
   Pedir `cpu-optimized` habilitaria a feature sem produzir oclusão nenhuma.
 - **Sem plane detection nem light estimation** nesta versão: o objeto não recebe a
   iluminação real do ambiente.
+- **Hand Input nativo não existe em celular**: o ARCore não expõe esqueleto de mão
+  ao WebXR. Num Galaxy S20 FE o caminho real é sempre o MediaPipe.
+- **`getUserMedia` não serve durante a AR**: o ARCore é dono da câmera. Por isso o
+  MediaPipe é alimentado pelo módulo Raw Camera Access (Chrome 107+).
+- **Oclusão e profundidade por pixel são excludentes**: `depthUsage` é único por
+  sessão. A oclusão exige `gpu-optimized`; ler profundidade no CPU exigiria
+  `cpu-optimized`. Escolhemos a oclusão, e a posição 3D da mão vem de raycast.
+- **MediaPipe custa banda e GPU**: ~7 MB de modelo mais o WASM, baixados do CDN na
+  primeira sessão. A inferência roda a 12 Hz e em 256 px de largura de propósito.
 - **Redimensionamento**: durante a sessão a projeção e o viewport são controlados pelo
   WebXR; o handler de resize só atua fora dela.

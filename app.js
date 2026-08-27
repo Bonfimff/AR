@@ -1,5 +1,6 @@
 import { ARExperience } from "./src/ar-experience.js";
 import { DEFAULT_MODEL_ID } from "./src/models.js";
+import { Diagnostics } from "./src/diagnostics.js";
 
 const ui = {
   startScreen: document.getElementById("start-screen"),
@@ -9,12 +10,15 @@ const ui = {
   gestureLayer: document.getElementById("gesture-layer"),
   instructions: document.getElementById("ar-instructions"),
   depthBadge: document.getElementById("depth-badge"),
+  diagPanel: document.getElementById("diag-panel"),
+  diagBtn: document.getElementById("diag-btn"),
   repositionBtn: document.getElementById("reposition-btn"),
   exitBtn: document.getElementById("exit-ar-btn"),
 };
 
 let experience = null;
 let depthBadgeTimer = null;
+let diagnostics = null;
 
 function showMessage(text) {
   ui.message.hidden = !text;
@@ -63,6 +67,7 @@ async function startAR() {
     gestureLayer: ui.gestureLayer,
     onStatus: setStatus,
     onDepthStatus: showDepthStatus,
+    onDiagnostics: (data, now) => diagnostics.update(data, now),
     onPlaced: () => {
       ui.repositionBtn.hidden = false;
     },
@@ -70,6 +75,8 @@ async function startAR() {
       experience = null;
       clearTimeout(depthBadgeTimer);
       ui.depthBadge.hidden = true;
+      diagnostics.setVisible(false);
+      ui.diagBtn.classList.remove("is-on");
       ui.hud.hidden = true;
       ui.repositionBtn.hidden = true;
       ui.startScreen.hidden = false;
@@ -102,6 +109,11 @@ async function init() {
     showMessage(problem);
     return;
   }
+
+  diagnostics = new Diagnostics(ui.diagPanel);
+  ui.diagBtn.addEventListener("click", () => {
+    ui.diagBtn.classList.toggle("is-on", diagnostics.toggle());
+  });
 
   ui.startBtn.addEventListener("click", startAR);
   ui.exitBtn.addEventListener("click", () => experience?.end());

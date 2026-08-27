@@ -3,6 +3,9 @@ import { loadEquipment, createSelectionIndicator, disposeObject } from "./equipm
 import { GestureController } from "./gestures.js";
 import { DEPTH_SENSING_INIT, inspectDepthSensing, isOcclusionLive } from "./occlusion.js";
 import { getModel } from "./models.js";
+import { createHandProvider } from "./hand/index.js";
+import { HandController, HAND_STATE } from "./hand-controller.js";
+import { FpsMeter } from "./diagnostics.js";
 
 /**
  * Sessão WebXR immersive-ar.
@@ -17,13 +20,23 @@ import { getModel } from "./models.js";
  * corrigida pelo tracking, e os gestos só alteram o offset local.
  */
 export class ARExperience {
-  constructor({ modelId, overlayRoot, gestureLayer, onStatus, onPlaced, onDepthStatus, onEnd }) {
+  constructor({
+    modelId,
+    overlayRoot,
+    gestureLayer,
+    onStatus,
+    onPlaced,
+    onDepthStatus,
+    onDiagnostics,
+    onEnd,
+  }) {
     this.model = getModel(modelId);
     this.overlayRoot = overlayRoot;
     this.gestureLayer = gestureLayer;
     this.onStatus = onStatus;
     this.onPlaced = onPlaced;
     this.onDepthStatus = onDepthStatus;
+    this.onDiagnostics = onDiagnostics;
     this.onEnd = onEnd;
 
     this.session = null;
@@ -36,17 +49,30 @@ export class ARExperience {
     this.hasInteracted = false;
     this.lastFrameTime = 0;
     this.occlusionLive = false;
+
+    this.handProvider = null;
+    this.handController = null;
+    this.fps = new FpsMeter();
   }
 
   async start() {
     this.buildScene();
 
     // Pré-carrega o modelo para que a colocação seja instantânea.
-    const modelPromise = loadEquipment(this.model.url);
+    const modelPromise = loadEquipment(this.model);
 
     this.session = await navigator.xr.requestSession("immersive-ar", {
       requiredFeatures: ["hit-test", "local"],
-      optionalFeatures: ["anchors", "dom-overlay", "depth-sensing"],
+      // hand-tracking: só existe em headsets hoje, mas pedimos para não excluir
+      // esse hardware. camera-access: é o que alimenta o MediaPipe sem disputar
+      // a câmera com o ARCore.
+      optionalFeatures: [
+        "anchors",
+        "dom-overlay",
+        "depth-sensing",
+        "hand-tracking",
+        "camera-access",
+      ],
       domOverlay: { root: this.overlayRoot },
       depthSensing: DEPTH_SENSING_INIT,
     });
@@ -70,14 +96,51 @@ export class ARExperience {
     try {
       this.equipment = await modelPromise;
       this.selectionIndicator = createSelectionIndicator(this.equipment);
+      this.handController?.setTarget(this.equipment);
     } catch (error) {
       this.onStatus(`Falha ao carregar ${this.model.url}.`);
       console.error(error);
     }
 
     this.setupInput();
+    await this.setupHandTracking();
     this.onStatus("Aponte para uma superfície e toque para posicionar");
     this.renderer.setAnimationLoop((time, frame) => this.render(time, frame));
+  }
+
+  /** Hand tracking é opcional: se falhar, a experiência segue no touchscreen. */
+  async setupHandTracking() {
+    try {
+      this.handProvider = await createHandProvider({
+        session: this.session,
+        renderer: this.renderer,
+      });
+    } catch (error) {
+      console.error("[AR] hand tracking indisponível:", error);
+      this.handProvider = null;
+    }
+
+    if (!this.handProvider || this.handProvider.kind === "off") return;
+
+    this.handController = new HandController({
+      getCamera: () => this.getXRCamera(),
+      getRect: () => this.gestureLayer.getBoundingClientRect(),
+      onStateChange: (state) => this.onHandStateChange(state),
+    });
+    this.handController.setTarget(this.equipment ?? null);
+  }
+
+  /**
+   * Impede que mão e toque escrevam no mesmo transform ao mesmo tempo:
+   * enquanto a mão segura o objeto, o controlador de toque fica sem alvo.
+   */
+  onHandStateChange(state) {
+    if (state === HAND_STATE.OBJECT_SELECTED) {
+      this.setSelected(true);
+      this.gestures?.setTarget(null);
+    } else if (state === HAND_STATE.RELEASED || state === HAND_STATE.IDLE) {
+      if (this.selected) this.gestures?.setTarget(this.equipment);
+    }
   }
 
   buildScene() {
@@ -189,6 +252,7 @@ export class ARExperience {
     this.selected = selected;
     if (this.selectionIndicator) this.selectionIndicator.visible = selected;
     this.gestures?.setTarget(selected ? this.equipment : null);
+    if (!selected) this.handController?.release();
 
     if (selected) {
       this.markInteracted();
@@ -278,6 +342,7 @@ export class ARExperience {
           }
         }
         this.gestures?.update(delta);
+        this.updateHand(frame, time, delta);
       }
 
       // A textura de profundidade só chega alguns frames depois do início.
@@ -287,7 +352,50 @@ export class ARExperience {
       }
     }
 
+    this.fps.tick(delta);
+    this.reportDiagnostics(time);
     this.renderer.render(this.scene, this.camera);
+  }
+
+  /**
+   * O controlador de mão só roda quando não há dedo na tela: o toque tem
+   * prioridade, para que os dois nunca disputem o mesmo objeto.
+   */
+  updateHand(frame, time, delta) {
+    if (!this.handProvider || !this.handController) return;
+    if (this.gestures?.pointers.size > 0) return;
+
+    const points = this.handProvider.update({
+      frame,
+      referenceSpace: this.referenceSpace,
+      camera: this.getXRCamera(),
+      xrCamera: this.getXRCamera(),
+      time: time / 1000,
+    });
+    this.handController.update(points, time / 1000, delta);
+  }
+
+  reportDiagnostics(time) {
+    if (!this.onDiagnostics) return;
+    const hand = this.handController?.sample;
+    this.onDiagnostics(
+      {
+        ar: "SUPPORTED",
+        hitTest: this.hitTestSource ? "ON" : "OFF",
+        hand: (this.handProvider?.kind ?? "off").toUpperCase(),
+        depth: this.occlusionLive
+          ? "ACTIVE"
+          : this.depthStatus?.enabled
+            ? "ENABLED"
+            : "UNSUPPORTED",
+        handDetected: hand ? "DETECTED" : "NOT DETECTED",
+        pinch: hand?.pinching ? "ON" : "OFF",
+        object: this.selected ? "SELECTED" : "FREE",
+        state: this.handController?.state ?? "—",
+        fps: this.fps.value,
+      },
+      time
+    );
   }
 
   end() {
@@ -310,6 +418,11 @@ export class ARExperience {
 
     this.gestures?.dispose();
     this.gestures = null;
+
+    this.handController?.dispose();
+    this.handController = null;
+    this.handProvider?.dispose();
+    this.handProvider = null;
 
     this.hitTestSource?.cancel?.();
     this.hitTestSource = null;

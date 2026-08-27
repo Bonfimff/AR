@@ -6,21 +6,40 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
  * base apoiada em y = 0 e centrado em X/Z, sem alterar a escala do modelo
  * (o GLB deve estar modelado em metros, como manda a convenção glTF).
  */
-export async function loadEquipment(url) {
+export async function loadEquipment(entry) {
+  const { url, dimensions, fitToDimensions } = typeof entry === "string" ? { url: entry } : entry;
+
   const loader = new GLTFLoader();
   const gltf = await loader.loadAsync(url);
 
   const model = gltf.scene;
-  const box = new THREE.Box3().setFromObject(model);
+  let box = new THREE.Box3().setFromObject(model);
+  let size = box.getSize(new THREE.Vector3());
+
+  // Escala física: ajusta o GLB às dimensões reais declaradas no registro,
+  // preservando a proporção pelo eixo mais restritivo.
+  if (dimensions && fitToDimensions) {
+    const factor = Math.min(
+      dimensions.width / (size.x || 1),
+      dimensions.height / (size.y || 1),
+      dimensions.depth / (size.z || 1)
+    );
+    if (Number.isFinite(factor) && factor > 0) {
+      model.scale.multiplyScalar(factor);
+      model.updateMatrixWorld(true);
+      box = new THREE.Box3().setFromObject(model);
+      size = box.getSize(new THREE.Vector3());
+    }
+  }
+
   const center = box.getCenter(new THREE.Vector3());
   model.position.set(-center.x, -box.min.y, -center.z);
 
-  const size = box.getSize(new THREE.Vector3());
   const maxDim = Math.max(size.x, size.y, size.z);
   if (maxDim > 10 || maxDim < 0.02) {
     console.warn(
       `[AR] Equipamento com ${maxDim.toFixed(2)} m na maior dimensão. ` +
-        "Verifique se o GLB foi exportado em metros."
+        "Verifique o GLB ou as dimensões declaradas em src/models.js."
     );
   }
 

@@ -1,0 +1,98 @@
+import { ARExperience } from "./src/ar-experience.js";
+
+// Troque este arquivo pelo GLB do equipamento real, mantendo o caminho.
+const MODEL_URL = "models/equipamento.glb";
+
+const ui = {
+  startScreen: document.getElementById("start-screen"),
+  startBtn: document.getElementById("start-ar-btn"),
+  message: document.getElementById("support-message"),
+  hud: document.getElementById("ar-hud"),
+  gestureLayer: document.getElementById("gesture-layer"),
+  instructions: document.getElementById("ar-instructions"),
+  repositionBtn: document.getElementById("reposition-btn"),
+  exitBtn: document.getElementById("exit-ar-btn"),
+};
+
+let experience = null;
+
+function showMessage(text) {
+  ui.message.hidden = !text;
+  ui.message.textContent = text ?? "";
+}
+
+function setStatus(text) {
+  ui.instructions.hidden = !text;
+  ui.instructions.textContent = text ?? "";
+}
+
+async function checkSupport() {
+  if (!window.isSecureContext) {
+    return "A experiência precisa ser servida por HTTPS (ou localhost). O WebXR não é liberado em conexões inseguras.";
+  }
+  if (!navigator.xr) {
+    return "Este navegador não implementa WebXR. Utilize o Google Chrome no Android com o Google Play Services for AR (ARCore) instalado e atualizado.";
+  }
+  const supported = await navigator.xr.isSessionSupported("immersive-ar").catch(() => false);
+  if (!supported) {
+    return "Este dispositivo/navegador não oferece suporte a WebXR immersive-ar, necessário para o rastreamento espacial desta experiência.";
+  }
+  return null;
+}
+
+async function startAR() {
+  ui.startBtn.disabled = true;
+  showMessage("");
+
+  experience = new ARExperience({
+    modelUrl: MODEL_URL,
+    overlayRoot: ui.hud,
+    gestureLayer: ui.gestureLayer,
+    onStatus: setStatus,
+    onPlaced: () => {
+      ui.repositionBtn.hidden = false;
+    },
+    onEnd: () => {
+      experience = null;
+      ui.hud.hidden = true;
+      ui.repositionBtn.hidden = true;
+      ui.startScreen.hidden = false;
+      ui.startBtn.disabled = false;
+      setStatus("");
+    },
+  });
+
+  ui.startScreen.hidden = true;
+  ui.hud.hidden = false;
+  ui.repositionBtn.hidden = true;
+
+  try {
+    await experience.start();
+  } catch (error) {
+    console.error(error);
+    experience?.cleanup();
+    experience = null;
+    ui.hud.hidden = true;
+    ui.startScreen.hidden = false;
+    ui.startBtn.disabled = false;
+    showMessage(`Não foi possível iniciar a sessão AR: ${error.message}`);
+  }
+}
+
+async function init() {
+  const problem = await checkSupport();
+  if (problem) {
+    ui.startBtn.disabled = true;
+    showMessage(problem);
+    return;
+  }
+
+  ui.startBtn.addEventListener("click", startAR);
+  ui.exitBtn.addEventListener("click", () => experience?.end());
+  ui.repositionBtn.addEventListener("click", () => {
+    ui.repositionBtn.hidden = true;
+    experience?.reposition();
+  });
+}
+
+init();

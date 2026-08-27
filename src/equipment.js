@@ -1,0 +1,54 @@
+import * as THREE from "three";
+import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
+
+/**
+ * Carrega o GLB do equipamento e o normaliza para uso em AR:
+ * base apoiada em y = 0 e centrado em X/Z, sem alterar a escala do modelo
+ * (o GLB deve estar modelado em metros, como manda a convenção glTF).
+ */
+export async function loadEquipment(url) {
+  const loader = new GLTFLoader();
+  const gltf = await loader.loadAsync(url);
+
+  const model = gltf.scene;
+  const box = new THREE.Box3().setFromObject(model);
+  const center = box.getCenter(new THREE.Vector3());
+  model.position.set(-center.x, -box.min.y, -center.z);
+
+  const size = box.getSize(new THREE.Vector3());
+  const maxDim = Math.max(size.x, size.y, size.z);
+  if (maxDim > 10 || maxDim < 0.02) {
+    console.warn(
+      `[AR] Equipamento com ${maxDim.toFixed(2)} m na maior dimensão. ` +
+        "Verifique se o GLB foi exportado em metros."
+    );
+  }
+
+  // Grupo externo: recebe as transformações do usuário (posição/rotação/escala).
+  const object = new THREE.Group();
+  object.name = "Equipamento";
+  object.add(model);
+  object.userData.size = size;
+
+  return object;
+}
+
+/** Libera geometrias, materiais e texturas de uma subárvore. */
+export function disposeObject(object) {
+  if (!object) return;
+  object.traverse((child) => {
+    child.geometry?.dispose();
+    const materials = Array.isArray(child.material)
+      ? child.material
+      : child.material
+        ? [child.material]
+        : [];
+    for (const material of materials) {
+      for (const value of Object.values(material)) {
+        if (value && value.isTexture) value.dispose();
+      }
+      material.dispose();
+    }
+  });
+  object.removeFromParent();
+}

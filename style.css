@@ -1,0 +1,143 @@
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html, body {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+  background: #0b0c0f;
+  color: #f2f2f2;
+}
+
+canvas {
+  display: block;
+  position: fixed;
+  inset: 0;
+  touch-action: none;
+}
+
+/* Tela inicial */
+.overlay {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: radial-gradient(circle at 50% 30%, #1a1c22, #0b0c0f);
+  z-index: 20;
+  padding: 24px;
+}
+
+.panel {
+  max-width: 420px;
+  width: 100%;
+  text-align: center;
+}
+
+.panel h1 {
+  font-size: 1.4rem;
+  font-weight: 600;
+  margin-bottom: 12px;
+  letter-spacing: -0.01em;
+}
+
+.panel p {
+  font-size: 0.95rem;
+  color: #b4b6bd;
+  line-height: 1.5;
+  margin-bottom: 24px;
+}
+
+.btn-primary {
+  appearance: none;
+  border: none;
+  background: #ffffff;
+  color: #0b0c0f;
+  font-size: 1rem;
+  font-weight: 600;
+  padding: 14px 28px;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: transform 0.15s ease, opacity 0.15s ease;
+}
+
+.btn-primary:active {
+  transform: scale(0.97);
+}
+
+.btn-primary:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.support-message {
+  margin-top: 20px;
+  color: #ff8b7a;
+  font-size: 0.85rem;
+  line-height: 1.5;
+}
+
+/* HUD durante AR — minimalista, não ocupa área central */
+.hud {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  align-items: center;
+  pointer-events: none;
+  padding: env(safe-area-inset-top, 16px) env(safe-area-inset-right, 16px)
+    env(safe-area-inset-bottom, 16px) env(safe-area-inset-left, 16px);
+}
+
+.instructions {
+  margin-top: 16px;
+  padding: 8px 16px;
+  background: rgba(11, 12, 15, 0.55);
+  backdrop-filter: blur(6px);
+  border-radius: 999px;
+  font-size: 0.85rem;
+  color: #f2f2f2;
+  text-align: center;
+}
+
+.hud-buttons {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 16px;
+  pointer-events: auto;
+}
+
+.btn-secondary {
+  appearance: none;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  background: rgba(11, 12, 15, 0.6);
+  backdrop-filter: blur(6px);
+  color: #f2f2f2;
+  font-size: 0.9rem;
+  font-weight: 500;
+  padding: 12px 20px;
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.btn-secondary:active {
+  background: rgba(255, 255, 255, 0.15);
+}
+
+/* Camada de captura de gestos: ocupa a tela inteira, atrás dos controles */
+.gesture-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: auto;
+  touch-action: none;
+}
+
+.instructions[hidden] {
+  display: none;
+}

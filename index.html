@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
+  <title>AR Equipamento — Prova de Conceito</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+  <!-- Tela inicial -->
+  <div id="start-screen" class="overlay">
+    <div class="panel">
+      <h1>Visualização em Realidade Aumentada</h1>
+      <p>Aponte a câmera para uma superfície plana e posicione o equipamento em escala real no ambiente.</p>
+      <button id="start-ar-btn" class="btn-primary">Iniciar Realidade Aumentada</button>
+      <p id="support-message" class="support-message" hidden></p>
+    </div>
+  </div>
+
+  <!-- HUD durante a sessão AR (raiz do dom-overlay do WebXR) -->
+  <div id="ar-hud" class="hud" hidden>
+    <!-- Camada que captura os gestos; fica abaixo dos botões -->
+    <div id="gesture-layer" class="gesture-layer"></div>
+
+    <p id="ar-instructions" class="instructions"></p>
+
+    <div class="hud-buttons">
+      <button id="reposition-btn" class="btn-secondary" hidden>Reposicionar</button>
+      <button id="exit-ar-btn" class="btn-secondary">Sair da AR</button>
+    </div>
+  </div>
+
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+        "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+      }
+    }
+  </script>
+  <script type="module" src="app.js"></script>
+</body>
+</html>

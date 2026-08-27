@@ -8,6 +8,7 @@ const ROWS = [
   ["hand", "HAND TRACKING"],
   ["depth", "DEPTH"],
   ["orient", "DEPTH ORIENT"],
+  ["mask", "HAND MASK"],
   ["camera", "CAM FRAME"],
   ["infer", "INFERENCIAS"],
   ["handDetected", "HAND"],

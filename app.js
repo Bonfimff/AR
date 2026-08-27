@@ -39,10 +39,13 @@ function showDepthStatus(status) {
     ? "Oclusão por profundidade ativa"
     : status.enabled
       ? `Profundidade negociada (${status.usage})`
-      : "Sem oclusão por profundidade";
+      : status.mask
+        ? "Sem profundidade — oclusão da mão por rastreamento"
+        : "Sem oclusão por profundidade";
   ui.depthBadge.classList.toggle("is-off", !status.active);
-  // O visualizador só existe no caminho CPU, que é o que desenhamos aqui.
-  if (status.cpu) ui.depthBtn.hidden = false;
+  // O visualizador serve às duas camadas que desenhamos: mapa de profundidade
+  // (caminho CPU) e silhueta da mão.
+  if (status.cpu || status.mask) ui.depthBtn.hidden = false;
   depthBadgeTimer = setTimeout(() => {
     ui.depthBadge.hidden = true;
   }, 4000);

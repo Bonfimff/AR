@@ -12,6 +12,7 @@ style.css                      estilos (tela inicial e HUD da AR)
 app.js                         bootstrap, verificação de suporte, ligação da UI
 src/ar-experience.js           AR ENGINE: sessão, hit-test, âncora, seleção, loop
 src/occlusion.js               oclusão por profundidade (WebXR Depth Sensing)
+src/hand-occlusion.js          oclusão da mão por silhueta dos landmarks
 src/gestures.js                GESTURE ENGINE (touchscreen)
 src/hand/index.js              seleção do provider de hand tracking
 src/hand/native-hand.js        HAND TRACKING via WebXR Hand Input
@@ -150,10 +151,38 @@ filtros era lida como gesto de escala.
 O touchscreen tem prioridade: enquanto há um dedo na tela, o controle por mão
 fica suspenso, para que os dois nunca escrevam no mesmo transform.
 
+## As duas camadas de oclusão
+
+São mecanismos diferentes, e o painel mostra os dois separadamente.
+
+| Camada | O que é | Cobre | Não cobre |
+|---|---|---|---|
+| `DEPTH` | Profundidade medida pelo ARCore | objetos e paredes **parados** | qualquer coisa em movimento |
+| `HAND MASK` | Silhueta reconstruída dos 21 landmarks | a **mão** do usuário | pessoas, objetos |
+
+**Por que a máscara existe.** O depth-from-motion do ARCore assume cena estática
+e é preciso de 0,5 m a 5 m. Uma mão diante da câmera é objeto em movimento e
+quase sempre mais perto que isso, então o mapa devolve a profundidade do fundo e
+o equipamento é desenhado por cima. Ocluir atrás de objetos em movimento depende
+de sensor **ToF**, que o Galaxy S20 FE não possui (a DepthVision existiu só no
+S20+ e no S20 Ultra).
+
+**O que a máscara é, honestamente.** Aproximação baseada em rastreamento, não
+medição real. A distância vem do tamanho da mão na imagem combinado com a
+projeção da câmera, então ela acompanha aproximar e afastar. Compõe com a
+profundidade real usando `LessDepth`: só vence onde estiver de fato mais perto.
+Desligue com `?handmask=0` para comparar as duas.
+
 ## Painel de diagnóstico
 
 O botão **i** no HUD mostra/esconde AR, HIT TEST, HAND TRACKING (NATIVE /
-MEDIAPIPE / OFF), DEPTH, HAND, PINCH, OBJECT, STATE e FPS. Ele diz qual camada
+MEDIAPIPE / OFF), DEPTH, DEPTH ORIENT, HAND MASK, CAM FRAME, INFERENCIAS, HAND,
+PINCH, OBJECT, STATE e FPS.
+
+O botão **D** liga a visualização das camadas de oclusão: o mapa de profundidade
+sai como gradiente (vermelho = perto, verde = longe) e a silhueta da mão em
+ciano. Cada toque avança uma das quatro convenções de orientação do mapa antes
+de desligar — a escolhida continua valendo, e `?depthorient=N` a fixa. Ele diz qual camada
 está realmente ativa — nenhum fallback é silencioso. Esconda-o para a
 apresentação.
 

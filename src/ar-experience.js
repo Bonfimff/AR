@@ -11,6 +11,7 @@ import {
 import { getModel } from "./models.js";
 import { createHandProvider } from "./hand/index.js";
 import { HandController, HAND_STATE } from "./hand-controller.js";
+import { HandOcclusion } from "./hand-occlusion.js";
 import { FpsMeter } from "./diagnostics.js";
 
 /**
@@ -59,6 +60,7 @@ export class ARExperience {
     this.handProvider = null;
     this.handController = null;
     this.cpuOcclusion = null;
+    this.handMask = null;
     this.fps = new FpsMeter();
   }
 
@@ -105,7 +107,6 @@ export class ARExperience {
     }
     this.depthStatus.cpu = Boolean(this.cpuOcclusion);
     console.info("[AR] depth-sensing:", this.depthStatus);
-    this.onDepthStatus?.(this.depthStatus);
 
     this.referenceSpace = this.renderer.xr.getReferenceSpace();
     this.viewerSpace = await this.session.requestReferenceSpace("viewer");
@@ -122,6 +123,10 @@ export class ARExperience {
 
     this.setupInput();
     await this.setupHandTracking();
+
+    // Reportado só agora para que o aviso já saiba se há máscara de mão.
+    this.depthStatus.mask = Boolean(this.handMask);
+    this.onDepthStatus?.(this.depthStatus);
     this.onStatus("Aponte para uma superfície e toque para posicionar");
     this.renderer.setAnimationLoop((time, frame) => this.render(time, frame));
   }
@@ -132,23 +137,29 @@ export class ARExperience {
    * então dá para achar a certa olhando e seguir usando.
    */
   cycleDepthDebug() {
-    if (!this.cpuOcclusion) return false;
+    if (!this.cpuOcclusion && !this.handMask) return false;
 
     if (!this.depthDebug) {
       this.depthDebug = true;
-      this.cpuOcclusion.setOrientation(0);
-      this.cpuOcclusion.setDebug(true);
+      this.cpuOcclusion?.setOrientation(0);
+      this.cpuOcclusion?.setDebug(true);
+      this.handMask?.setDebug(true); // silhueta em ciano, sobre o mapa
       return true;
     }
 
-    const next = this.cpuOcclusion.orientation + 1;
-    if (next >= ORIENTATIONS) {
-      this.depthDebug = false;
-      this.cpuOcclusion.setDebug(false);
-      return false;
+    // Com profundidade, cada toque avança uma orientação antes de desligar.
+    if (this.cpuOcclusion) {
+      const next = this.cpuOcclusion.orientation + 1;
+      if (next < ORIENTATIONS) {
+        this.cpuOcclusion.setOrientation(next);
+        return true;
+      }
     }
-    this.cpuOcclusion.setOrientation(next);
-    return true;
+
+    this.depthDebug = false;
+    this.cpuOcclusion?.setDebug(false);
+    this.handMask?.setDebug(false);
+    return false;
   }
 
   /** Hand tracking é opcional: se falhar, a experiência segue no touchscreen. */
@@ -164,6 +175,13 @@ export class ARExperience {
     }
 
     if (!this.handProvider || this.handProvider.kind === "off") return;
+
+    // Máscara da mão: só faz sentido com um provider de mão ativo. Pode ser
+    // desligada com ?handmask=0 para comparar com a oclusão por profundidade.
+    if (new URLSearchParams(location.search).get("handmask") !== "0") {
+      this.handMask = new HandOcclusion();
+      this.scene.add(this.handMask.mesh);
+    }
 
     this.handController = new HandController({
       getCamera: () => this.getXRCamera(),
@@ -410,16 +428,25 @@ export class ARExperience {
    * prioridade, para que os dois nunca disputem o mesmo objeto.
    */
   updateHand(view, time, delta) {
-    if (!this.handProvider || !this.handController) return;
-    if (this.gestures?.pointers.size > 0) return;
+    if (!this.handProvider) return;
 
+    const camera = this.getXRCamera();
     const points = this.handProvider.update({
       frame: this.currentFrame,
       referenceSpace: this.referenceSpace,
-      camera: this.getXRCamera(),
+      camera,
       xrCamera: view?.camera ?? null, // XRCamera do WebXR, não a do Three.js
       time: time / 1000,
     });
+
+    // A máscara acompanha a mão mesmo durante um gesto de toque: ela é oclusão
+    // visual, não entrada, e sumir no meio do arrasto seria pior.
+    const viewport = camera?.viewport;
+    const aspect = viewport ? viewport.z / viewport.w : window.innerWidth / window.innerHeight;
+    this.handMask?.update(points, camera, aspect, time / 1000);
+
+    // O controle, sim, cede a vez ao toque para não disputarem o objeto.
+    if (!this.handController || this.gestures?.pointers.size > 0) return;
     this.handController.update(points, time / 1000, delta);
   }
 
@@ -437,6 +464,7 @@ export class ARExperience {
             ? `ENABLED ${this.depthStatus.usage ?? ""}`
             : "UNSUPPORTED",
         orient: this.cpuOcclusion ? this.cpuOcclusion.orientation : "—",
+        mask: this.handMask ? (this.handMask.active ? `ON ${this.handMask.distance.toFixed(2)}m` : "OFF") : "—",
         camera: this.handProvider?.hasCameraTexture
           ? "TEXTURE OK"
           : this.handProvider?.kind === "mediapipe"
@@ -478,6 +506,8 @@ export class ARExperience {
     this.handController = null;
     this.cpuOcclusion?.dispose();
     this.cpuOcclusion = null;
+    this.handMask?.dispose();
+    this.handMask = null;
     this.handProvider?.dispose();
     this.handProvider = null;
 

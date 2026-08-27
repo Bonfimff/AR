@@ -53,7 +53,11 @@ export function isOcclusionLive(renderer, cpuOcclusion) {
  * na frente escondendo o equipamento.
  */
 export class CpuDepthOcclusion {
-  constructor() {
+  /**
+   * @param {object} [options]
+   * @param {number} [options.orientation] 0..3, ver ORIENTATIONS.
+   */
+  constructor({ orientation = 1 } = {}) {
     this.active = false;
     this.texture = null;
     this.meters = null;
@@ -66,7 +70,11 @@ export class CpuDepthOcclusion {
       viewport: { value: new THREE.Vector4(0, 0, 1, 1) },
       projection: { value: new THREE.Matrix4() },
       debug: { value: 0 },
+      // x: inverte o Y ANTES da matriz; y: inverte o Y DEPOIS dela.
+      flip: { value: new THREE.Vector2() },
     };
+    this.orientation = -1;
+    this.setOrientation(orientation);
 
     this.mesh = new THREE.Mesh(
       new THREE.PlaneGeometry(2, 2),
@@ -112,6 +120,25 @@ export class CpuDepthOcclusion {
 
     this.mesh.visible = true;
     this.active = true;
+  }
+
+  /**
+   * Convenção de orientação do mapa de profundidade.
+   *
+   * gl_FragCoord tem origem embaixo à esquerda; as "normalized view
+   * coordinates" da spec têm origem em cima à esquerda. Só que a matriz
+   * normDepthBufferFromNormView também pode carregar a rotação entre o buffer
+   * do ARCore (paisagem) e a tela (retrato) — e nesse caso inverter o Y antes
+   * ou depois da matriz dá resultados diferentes. Como isso varia por
+   * aparelho, as quatro combinações ficam selecionáveis em runtime pelo
+   * botão "D", em vez de fixadas num palpite.
+   */
+  setOrientation(index) {
+    const next = ((index % ORIENTATIONS) + ORIENTATIONS) % ORIENTATIONS;
+    if (next === this.orientation) return next;
+    this.orientation = next;
+    this.uniforms.flip.value.set(next & 1, (next >> 1) & 1);
+    return next;
   }
 
   /** Pinta o mapa de profundidade por cima, para conferir alinhamento e escala. */
@@ -167,6 +194,8 @@ export class CpuDepthOcclusion {
   }
 }
 
+export const ORIENTATIONS = 4;
+
 const _size = new THREE.Vector2();
 
 const VERTEX = /* glsl */ `
@@ -183,13 +212,18 @@ uniform mat4 uvTransform;
 uniform mat4 projection;
 uniform vec4 viewport;
 uniform float debug;
+uniform vec2 flip;
 out vec4 fragColor;
 
 void main() {
   fragColor = vec4(0.0);
 
-  vec2 normView = (gl_FragCoord.xy - viewport.xy) / viewport.zw;
+  // Ver setOrientation(): a origem vertical pode precisar de conversão antes
+  // da matriz, depois dela, nas duas ou em nenhuma, conforme o aparelho.
+  vec2 raw = (gl_FragCoord.xy - viewport.xy) / viewport.zw;
+  vec2 normView = vec2(raw.x, mix(raw.y, 1.0 - raw.y, flip.x));
   vec2 uv = (uvTransform * vec4(normView, 0.0, 1.0)).xy;
+  uv.y = mix(uv.y, 1.0 - uv.y, flip.y);
   if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) {
     gl_FragDepth = 1.0;
     return;

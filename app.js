@@ -123,7 +123,7 @@ async function init() {
   });
 
   ui.depthBtn.addEventListener("click", () => {
-    ui.depthBtn.classList.toggle("is-on", experience?.toggleDepthDebug() ?? false);
+    ui.depthBtn.classList.toggle("is-on", experience?.cycleDepthDebug() ?? false);
   });
 
   ui.startBtn.addEventListener("click", startAR);

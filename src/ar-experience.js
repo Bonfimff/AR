@@ -6,6 +6,7 @@ import {
   inspectDepthSensing,
   isOcclusionLive,
   CpuDepthOcclusion,
+  ORIENTATIONS,
 } from "./occlusion.js";
 import { getModel } from "./models.js";
 import { createHandProvider } from "./hand/index.js";
@@ -95,7 +96,11 @@ export class ARExperience {
 
     // O Three.js só cobre o modo gpu-optimized; no modo cpu fazemos o passe.
     if (this.depthStatus.enabled && this.depthStatus.usage === "cpu-optimized") {
-      this.cpuOcclusion = new CpuDepthOcclusion();
+      // ?depthorient=0..3 fixa a convenção quando ela já for conhecida.
+      const forced = Number(new URLSearchParams(location.search).get("depthorient"));
+      this.cpuOcclusion = new CpuDepthOcclusion({
+        orientation: Number.isInteger(forced) ? forced : 1,
+      });
       this.scene.add(this.cpuOcclusion.mesh);
     }
     this.depthStatus.cpu = Boolean(this.cpuOcclusion);
@@ -121,12 +126,29 @@ export class ARExperience {
     this.renderer.setAnimationLoop((time, frame) => this.render(time, frame));
   }
 
-  /** Liga/desliga a visualização do mapa de profundidade (só no caminho CPU). */
-  toggleDepthDebug() {
+  /**
+   * Botão "D": desligado -> visualiza orientação 0 -> 1 -> 2 -> 3 -> desligado.
+   * A orientação escolhida continua valendo depois de fechar a visualização,
+   * então dá para achar a certa olhando e seguir usando.
+   */
+  cycleDepthDebug() {
     if (!this.cpuOcclusion) return false;
-    this.depthDebug = !this.depthDebug;
-    this.cpuOcclusion.setDebug(this.depthDebug);
-    return this.depthDebug;
+
+    if (!this.depthDebug) {
+      this.depthDebug = true;
+      this.cpuOcclusion.setOrientation(0);
+      this.cpuOcclusion.setDebug(true);
+      return true;
+    }
+
+    const next = this.cpuOcclusion.orientation + 1;
+    if (next >= ORIENTATIONS) {
+      this.depthDebug = false;
+      this.cpuOcclusion.setDebug(false);
+      return false;
+    }
+    this.cpuOcclusion.setOrientation(next);
+    return true;
   }
 
   /** Hand tracking é opcional: se falhar, a experiência segue no touchscreen. */
@@ -414,6 +436,7 @@ export class ARExperience {
           : this.depthStatus?.enabled
             ? `ENABLED ${this.depthStatus.usage ?? ""}`
             : "UNSUPPORTED",
+        orient: this.cpuOcclusion ? this.cpuOcclusion.orientation : "—",
         camera: this.handProvider?.hasCameraTexture
           ? "TEXTURE OK"
           : this.handProvider?.kind === "mediapipe"

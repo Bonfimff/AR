@@ -29,8 +29,33 @@ export async function loadEquipment(url) {
   object.name = "Equipamento";
   object.add(model);
   object.userData.size = size;
+  object.userData.footprint = Math.max(Math.hypot(size.x, size.z) / 2, 0.12);
 
   return object;
+}
+
+/**
+ * Anel discreto no piso, sob o objeto, indicando o estado "selecionado".
+ * Entra como filho do objeto para acompanhar posição, rotação e escala.
+ */
+export function createSelectionIndicator(object) {
+  const radius = object.userData.footprint * 1.2;
+  const ring = new THREE.Mesh(
+    new THREE.RingGeometry(radius * 0.94, radius, 48).rotateX(-Math.PI / 2),
+    new THREE.MeshBasicMaterial({
+      color: 0x00e0a4,
+      transparent: true,
+      opacity: 0.85,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    })
+  );
+  ring.name = "SelectionIndicator";
+  ring.position.y = 0.005; // evita z-fighting com o piso
+  ring.visible = false;
+  ring.raycast = () => {}; // não deve capturar o toque de seleção
+  object.add(ring);
+  return ring;
 }
 
 /** Libera geometrias, materiais e texturas de uma subárvore. */

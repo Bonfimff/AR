@@ -1,7 +1,5 @@
 import { ARExperience } from "./src/ar-experience.js";
-
-// Troque este arquivo pelo GLB do equipamento real, mantendo o caminho.
-const MODEL_URL = "models/equipamento.glb";
+import { DEFAULT_MODEL_ID } from "./src/models.js";
 
 const ui = {
   startScreen: document.getElementById("start-screen"),
@@ -10,11 +8,13 @@ const ui = {
   hud: document.getElementById("ar-hud"),
   gestureLayer: document.getElementById("gesture-layer"),
   instructions: document.getElementById("ar-instructions"),
+  depthBadge: document.getElementById("depth-badge"),
   repositionBtn: document.getElementById("reposition-btn"),
   exitBtn: document.getElementById("exit-ar-btn"),
 };
 
 let experience = null;
+let depthBadgeTimer = null;
 
 function showMessage(text) {
   ui.message.hidden = !text;
@@ -24,6 +24,19 @@ function showMessage(text) {
 function setStatus(text) {
   ui.instructions.hidden = !text;
   ui.instructions.textContent = text ?? "";
+}
+
+/** Aviso discreto e temporário sobre o estado da oclusão por profundidade. */
+function showDepthStatus(status) {
+  clearTimeout(depthBadgeTimer);
+  ui.depthBadge.hidden = false;
+  ui.depthBadge.textContent = status.active
+    ? "Oclusão por profundidade ativa"
+    : "Sem oclusão por profundidade";
+  ui.depthBadge.classList.toggle("is-off", !status.active);
+  depthBadgeTimer = setTimeout(() => {
+    ui.depthBadge.hidden = true;
+  }, 4000);
 }
 
 async function checkSupport() {
@@ -45,15 +58,18 @@ async function startAR() {
   showMessage("");
 
   experience = new ARExperience({
-    modelUrl: MODEL_URL,
+    modelId: DEFAULT_MODEL_ID,
     overlayRoot: ui.hud,
     gestureLayer: ui.gestureLayer,
     onStatus: setStatus,
+    onDepthStatus: showDepthStatus,
     onPlaced: () => {
       ui.repositionBtn.hidden = false;
     },
     onEnd: () => {
       experience = null;
+      clearTimeout(depthBadgeTimer);
+      ui.depthBadge.hidden = true;
       ui.hud.hidden = true;
       ui.repositionBtn.hidden = true;
       ui.startScreen.hidden = false;

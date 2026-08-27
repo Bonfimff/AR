@@ -1,37 +1,54 @@
 import * as THREE from "three";
-import { loadEquipment, disposeObject } from "./equipment.js";
+import { loadEquipment, createSelectionIndicator, disposeObject } from "./equipment.js";
 import { GestureController } from "./gestures.js";
+import { DEPTH_SENSING_INIT, inspectDepthSensing, isOcclusionLive } from "./occlusion.js";
+import { getModel } from "./models.js";
 
 /**
- * Sessão WebXR immersive-ar: hit-test para achar a superfície, âncora espacial
- * para manter o objeto fixo no mundo real e gestos para ajustá-lo.
+ * Sessão WebXR immersive-ar.
+ *
+ * Estrutura espacial (inalterada da V1):
+ *   scene
+ *     └─ anchorGroup   <- pose da XRAnchor, reescrita a cada frame pelo ARCore
+ *          └─ equipment <- posição/rotação/escala definidas pelo usuário
+ *
+ * Manter o transform do usuário num filho da âncora é o que permite mover,
+ * girar e escalar sem perder a referência espacial: a âncora continua sendo
+ * corrigida pelo tracking, e os gestos só alteram o offset local.
  */
 export class ARExperience {
-  constructor({ modelUrl, overlayRoot, gestureLayer, onStatus, onPlaced, onEnd }) {
-    this.modelUrl = modelUrl;
+  constructor({ modelId, overlayRoot, gestureLayer, onStatus, onPlaced, onDepthStatus, onEnd }) {
+    this.model = getModel(modelId);
     this.overlayRoot = overlayRoot;
     this.gestureLayer = gestureLayer;
     this.onStatus = onStatus;
     this.onPlaced = onPlaced;
+    this.onDepthStatus = onDepthStatus;
     this.onEnd = onEnd;
 
     this.session = null;
     this.equipment = null;
+    this.selectionIndicator = null;
     this.anchor = null;
     this.placementRequested = false;
     this.awaitingPlacement = true;
+    this.selected = false;
+    this.hasInteracted = false;
+    this.lastFrameTime = 0;
+    this.occlusionLive = false;
   }
 
   async start() {
     this.buildScene();
 
     // Pré-carrega o modelo para que a colocação seja instantânea.
-    const modelPromise = loadEquipment(this.modelUrl);
+    const modelPromise = loadEquipment(this.model.url);
 
     this.session = await navigator.xr.requestSession("immersive-ar", {
       requiredFeatures: ["hit-test", "local"],
-      optionalFeatures: ["anchors", "dom-overlay"],
+      optionalFeatures: ["anchors", "dom-overlay", "depth-sensing"],
       domOverlay: { root: this.overlayRoot },
+      depthSensing: DEPTH_SENSING_INIT,
     });
 
     this.overlayActive = this.session.domOverlayState?.type === "screen";
@@ -42,20 +59,25 @@ export class ARExperience {
     this.renderer.xr.setReferenceSpaceType("local");
     await this.renderer.xr.setSession(this.session);
 
+    this.depthStatus = inspectDepthSensing(this.session, this.renderer);
+    console.info("[AR] depth-sensing:", this.depthStatus);
+    this.onDepthStatus?.(this.depthStatus);
+
     this.referenceSpace = this.renderer.xr.getReferenceSpace();
     this.viewerSpace = await this.session.requestReferenceSpace("viewer");
     this.hitTestSource = await this.session.requestHitTestSource({ space: this.viewerSpace });
 
     try {
       this.equipment = await modelPromise;
+      this.selectionIndicator = createSelectionIndicator(this.equipment);
     } catch (error) {
-      this.onStatus("Falha ao carregar models/equipamento.glb.");
+      this.onStatus(`Falha ao carregar ${this.model.url}.`);
       console.error(error);
     }
 
     this.setupInput();
     this.onStatus("Aponte para uma superfície e toque para posicionar");
-    this.renderer.setAnimationLoop((time, frame) => this.render(frame));
+    this.renderer.setAnimationLoop((time, frame) => this.render(time, frame));
   }
 
   buildScene() {
@@ -74,18 +96,29 @@ export class ARExperience {
     key.position.set(1, 3, 2);
     this.scene.add(key);
 
+    // depthTest desligado: o retículo é uma guia de UI e não deve sumir sob o
+    // ruído do mapa de profundidade nem brigar em z com o próprio piso.
     this.reticle = new THREE.Mesh(
       new THREE.RingGeometry(0.07, 0.09, 40).rotateX(-Math.PI / 2),
-      new THREE.MeshBasicMaterial({ color: 0x00e0a4, transparent: true, opacity: 0.9 })
+      new THREE.MeshBasicMaterial({
+        color: 0x00e0a4,
+        transparent: true,
+        opacity: 0.9,
+        depthTest: false,
+        depthWrite: false,
+      })
     );
+    this.reticle.renderOrder = 10;
     this.reticle.matrixAutoUpdate = false;
     this.reticle.visible = false;
     this.scene.add(this.reticle);
 
-    // Recebe a pose da âncora; o equipamento é seu filho e guarda os ajustes do usuário.
     this.anchorGroup = new THREE.Group();
     this.anchorGroup.visible = false;
     this.scene.add(this.anchorGroup);
+
+    this.raycaster = new THREE.Raycaster();
+    this._ndc = new THREE.Vector2();
 
     this._onResize = () => this.onResize();
     window.addEventListener("resize", this._onResize);
@@ -109,7 +142,8 @@ export class ARExperience {
       this.gestures = new GestureController({
         element: this.gestureLayer,
         getCamera: () => this.getXRCamera(),
-        onTap: () => this.requestPlacement(),
+        onTap: (x, y) => this.handleTap(x, y),
+        onChange: () => this.markInteracted(),
       });
     } else {
       // Sem dom-overlay não há eventos DOM: usa o 'select' do próprio WebXR.
@@ -124,16 +158,61 @@ export class ARExperience {
     return xrCamera.cameras[0] ?? xrCamera;
   }
 
+  // ---- toque: colocar, selecionar, desselecionar ----
+
+  handleTap(clientX, clientY) {
+    if (this.awaitingPlacement) {
+      this.requestPlacement();
+      return;
+    }
+    if (!this.equipment) return;
+
+    const hitObject = this.raycastEquipment(clientX, clientY);
+    if (hitObject) this.setSelected(true);
+    else if (this.selected) this.setSelected(false);
+  }
+
+  raycastEquipment(clientX, clientY) {
+    const camera = this.getXRCamera();
+    if (!camera) return false;
+    const rect = this.gestureLayer.getBoundingClientRect();
+    this._ndc.set(
+      ((clientX - rect.left) / rect.width) * 2 - 1,
+      -((clientY - rect.top) / rect.height) * 2 + 1
+    );
+    this.raycaster.setFromCamera(this._ndc, camera);
+    return this.raycaster.intersectObject(this.equipment, true).length > 0;
+  }
+
+  setSelected(selected) {
+    if (this.selected === selected) return;
+    this.selected = selected;
+    if (this.selectionIndicator) this.selectionIndicator.visible = selected;
+    this.gestures?.setTarget(selected ? this.equipment : null);
+
+    if (selected) {
+      this.markInteracted();
+    } else if (this.hasInteracted) {
+      this.onStatus("");
+    }
+  }
+
+  markInteracted() {
+    if (this.hasInteracted) return;
+    this.hasInteracted = true;
+    this.onStatus(""); // some o indicador após a primeira interação
+  }
+
   requestPlacement() {
     if (this.awaitingPlacement && this.equipment) this.placementRequested = true;
   }
 
   reposition() {
+    this.setSelected(false);
     this.awaitingPlacement = true;
     this.placementRequested = false;
     this.anchorGroup.visible = false;
     this.detachAnchor();
-    this.gestures?.setTarget(null);
     this.onStatus("Aponte para uma superfície e toque para posicionar");
   }
 
@@ -154,15 +233,13 @@ export class ARExperience {
     this.anchorGroup.position.set(p.x, p.y, p.z);
     this.anchorGroup.visible = true;
 
-    if (this.equipment.parent !== this.anchorGroup) {
-      this.equipment.position.set(0, 0, 0);
-      this.equipment.rotation.set(0, 0, 0);
-      this.equipment.scale.setScalar(1);
-      this.anchorGroup.add(this.equipment);
-    }
+    // Zera o transform do usuário a cada nova colocação.
+    this.equipment.position.set(0, 0, 0);
+    this.equipment.rotation.set(0, 0, 0);
+    this.equipment.scale.setScalar(1);
+    if (this.equipment.parent !== this.anchorGroup) this.anchorGroup.add(this.equipment);
 
-    this.gestures?.setTarget(this.equipment);
-    this.onStatus("");
+    this.onStatus(this.hasInteracted ? "" : "Toque no objeto para manipular");
     this.onPlaced();
 
     if (this.anchorsSupported) {
@@ -177,24 +254,36 @@ export class ARExperience {
     }
   }
 
-  render(frame) {
-    if (frame) {
-      const results = this.hitTestSource ? frame.getHitTestResults(this.hitTestSource) : [];
+  render(time, frame) {
+    const delta = this.lastFrameTime ? Math.min((time - this.lastFrameTime) / 1000, 0.1) : 0;
+    this.lastFrameTime = time;
 
+    if (frame) {
       if (this.awaitingPlacement) {
+        // O hit-test só é consultado enquanto há algo a posicionar.
+        const results = this.hitTestSource ? frame.getHitTestResults(this.hitTestSource) : [];
         const pose = results[0]?.getPose(this.referenceSpace);
         this.reticle.visible = Boolean(pose);
         if (pose) {
           this.reticle.matrix.fromArray(pose.transform.matrix);
           if (this.placementRequested) this.place(results[0], pose);
         }
-      } else if (this.anchor) {
-        // A âncora é reajustada pelo ARCore conforme o mapa do ambiente evolui.
-        const anchorPose = frame.getPose(this.anchor.anchorSpace, this.referenceSpace);
-        if (anchorPose) {
-          const p = anchorPose.transform.position;
-          this.anchorGroup.position.set(p.x, p.y, p.z);
+      } else {
+        if (this.anchor) {
+          // A âncora é reajustada pelo ARCore conforme o mapa do ambiente evolui.
+          const anchorPose = frame.getPose(this.anchor.anchorSpace, this.referenceSpace);
+          if (anchorPose) {
+            const p = anchorPose.transform.position;
+            this.anchorGroup.position.set(p.x, p.y, p.z);
+          }
         }
+        this.gestures?.update(delta);
+      }
+
+      // A textura de profundidade só chega alguns frames depois do início.
+      if (!this.occlusionLive && isOcclusionLive(this.renderer)) {
+        this.occlusionLive = true;
+        this.onDepthStatus?.({ ...this.depthStatus, active: true, live: true });
       }
     }
 
@@ -229,6 +318,7 @@ export class ARExperience {
     disposeObject(this.equipment);
     disposeObject(this.reticle);
     this.equipment = null;
+    this.selectionIndicator = null;
 
     this.renderer?.dispose();
     this.renderer?.domElement.remove();
@@ -237,6 +327,8 @@ export class ARExperience {
     this.session = null;
 
     this.awaitingPlacement = true;
+    this.selected = false;
+    this.occlusionLive = false;
     this.onEnd();
   }
 }

@@ -25,7 +25,13 @@ export const HAND_STATE = {
 // Mesmo princípio já validado no toque: UM modo por manipulação.
 const MOVE_THRESHOLD = 0.045;
 const HEIGHT_THRESHOLD = 0.055;
-const ROLL_THRESHOLD = 0.3;
+// Pinçar E girar o pulso ao mesmo tempo é um gesto combinado incômodo — o
+// punho fica bem mais restrito com os dedos fechados que com a mão livre, e
+// o giro projetado na imagem acaba menor que um giro "de mão aberta" cheio.
+// 0,3 rad (~17°) exigia mais amplitude do que dá pra fazer confortavelmente
+// pinçando. Baixado para ~11°, que a margem de dominância (abaixo) já
+// protege de confundir com os outros gestos.
+const ROLL_THRESHOLD = 0.2;
 // A razão polegar-indicador é normalizada pelo tamanho da mão na imagem
 // (distância punho->dedo médio), mas essa normalização também é uma medida
 // 2D — quando a mão gira ou inclina para MOVER, ALTURAR ou GIRAR, as duas
@@ -52,7 +58,16 @@ const SMOOTHING = 12;
 // Ao fechar a pinça os filtros ainda estão convergindo. Sem esta carência, a
 // variação residual da razão polegar-indicador era classificada como gesto de
 // escala antes de o usuário mover qualquer coisa — escala involuntária.
-const GRAB_SETTLE_SECONDS = 0.25;
+//
+// Mas a carência tem um custo: enquanto ela dura, grab.ratio é continuamente
+// rebaseado para o valor atual (ver manipulate()), o que também apaga
+// qualquer gesto real que aconteça dentro da janela. REDUZIR a escala é um
+// aperto pequeno e rápido dos dedos — cabe inteiro dentro de 250ms com folga,
+// e saía zerado antes de a classificação começar a valer. CRESCER é um gesto
+// maior e mais lento (abrir bem os dedos), raramente termina dentro da
+// janela — por isso só "reduzir" parava de funcionar, não escala em geral.
+// Encurtada para reduzir essa perda sem abrir mão da carência.
+const GRAB_SETTLE_SECONDS = 0.12;
 
 export class HandController {
   constructor({ getCamera, getRect, onStateChange, onModeChange }) {
@@ -95,6 +110,28 @@ export class HandController {
 
   get manipulating() {
     return this.state === HAND_STATE.MANIPULATING || this.state === HAND_STATE.OBJECT_SELECTED;
+  }
+
+  /**
+   * Quanto o pulso já girou desde que a pinça fechou, em graus — só para o
+   * painel de diagnóstico. Existe para o caso de "girar não funciona"
+   * virar dado (quanto sinal o gesto realmente produziu, ANTES do limiar)
+   * em vez de mais uma suposição às cegas.
+   */
+  get rollDeltaDeg() {
+    if (!this.grab || !this.sample) return null;
+    return THREE.MathUtils.radToDeg(this.sample.roll - this.grab.roll);
+  }
+
+  /**
+   * Variação da razão polegar-indicador desde a pinça, em % — mesma ideia do
+   * rollDeltaDeg, para "reduzir escala" virar dado numa próxima tentativa
+   * em vez de mais um palpite. Negativo = fechando (reduzindo); positivo =
+   * abrindo (crescendo).
+   */
+  get scaleDeltaPct() {
+    if (!this.grab || !this.sample) return null;
+    return (this.sample.pinchRatio / this.grab.ratio - 1) * 100;
   }
 
   /**

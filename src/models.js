@@ -24,7 +24,7 @@ export const MODELS = {
     fitToDimensions: true,
     // O caminho do GLB não muda quando o modelo muda, então o navegador serve
     // a versão antiga do cache. Incremente ao substituir o arquivo.
-    version: 2,
+    version: 3, // v3: peças separadas em nós (vista explodida), ver tools/make-panel-glb.mjs
   },
 };
 

@@ -11,6 +11,8 @@ index.html                     interface + importmap do Three.js
 style.css                      estilos (tela inicial e HUD da AR)
 app.js                         bootstrap, verificação de suporte, ligação da UI
 src/ar-experience.js           AR ENGINE: sessão, hit-test, âncora, seleção, loop
+src/placement-guide.js         orientação de varredura + contorno do plano (plane-detection)
+src/explode.js                 vista explodida: separa as peças do equipamento
 src/occlusion.js               oclusão por profundidade (WebXR Depth Sensing)
 src/hand-occlusion.js          oclusão da mão por silhueta dos landmarks
 src/gestures.js                GESTURE ENGINE (touchscreen)
@@ -107,7 +109,11 @@ Abra no celular a URL `https://…` gerada.
 1. Instale/atualize o **Google Play Services for AR (ARCore)** na Play Store.
 2. Use o Chrome para Android atualizado (não Samsung Internet, não WebView de app).
 3. Abra a URL HTTPS e toque em **Iniciar Realidade Aumentada**; conceda a permissão de câmera.
-4. Aponte para o chão e mova o celular lateralmente por 2–3 s até o retículo verde aparecer.
+4. Aponte para o chão e mova o celular lateralmente por 2–3 s. O texto no topo orienta
+   isso mesmo; ele muda sozinho para "Toque para posicionar" quando o app já considera a
+   varredura suficiente — mas tocar antes disso também funciona, é só orientação, não
+   trava nada. Se o aparelho conceder `plane-detection`, o contorno real da superfície
+   mapeada aparece no chão em vez de só o retículo.
 5. Toque na tela para posicionar o equipamento.
 6. Caminhe ao redor: o objeto deve permanecer no mesmo ponto físico.
 7. **Toque no objeto** para selecioná-lo — um anel discreto aparece na base.
@@ -119,6 +125,8 @@ Abra no celular a URL `https://…` gerada.
    Cada gesto de dois dedos trava em UM modo por vez; solte os dedos para trocar.
    Um rótulo discreto no rodapé confirma qual modo está ativo.
 9. Toque fora do objeto para desselecionar. **Reposicionar** recoloca. **Sair da AR** encerra.
+10. **Vista explodida**: toque no botão para ver as peças do gabinete se separarem;
+    **Remontar** volta tudo ao lugar. Funciona junto com escala/giro/altura normalmente.
 
 Para testar a oclusão: com o objeto colocado, passe a mão entre o celular e o
 equipamento. A mão deve cobrir a parte correspondente do objeto. O aviso no topo da
@@ -160,7 +168,16 @@ nenhum. Trocado pelo vetor indicador -> mínimo (a linha dos nós dos dedos),
 perpendicular ao antebraço: gira visivelmente na imagem quando o pulso gira,
 como girar uma maçaneta. Confirmado com uma simulação numérica (um giro de
 90° do pulso produzia 0,0 rad no sinal antigo e 1,57 rad — os 90° esperados
-— no novo).
+— no novo). **Testado no aparelho depois dessa troca e ainda não funcionava.**
+Duas causas prováveis, corrigidas juntas: o filtro do sinal (`rollFilter` em
+[hand-analyzer.js](src/hand/hand-analyzer.js)) herdou o `beta` baixo do sinal
+antigo, que mal se movia — contra um giro rápido de verdade, esse beta
+suavizava a maior parte do movimento antes de acumular; e `ROLL_THRESHOLD`
+(~17°) supunha uma amplitude de giro que pinçar ao mesmo tempo (mão mais
+restrita) dificulta alcançar — baixado para ~11°. Também adicionado
+`ROLL Δ` no painel de diagnóstico: mostra em graus quanto o pulso já girou
+desde que a pinça fechou, então uma próxima tentativa que falhar mostra o
+número real em vez de exigir mais um palpite.
 
 **Escala se confundindo com os outros gestos.** A razão polegar-indicador é
 normalizada pelo tamanho da mão na imagem (distância punho->dedo médio) —
@@ -170,6 +187,26 @@ ou fechar os dedos de verdade. `RATIO_THRESHOLD` subiu de 0,18 para 0,26:
 exige uma abertura/fechamento bem mais deliberado antes de travar em escala,
 o que reduz o falso-positivo sem eliminar a causa — isso exigiria
 profundidade 3D por landmark, que o MediaPipe 2D usado aqui não entrega.
+
+**Reduzir a escala especificamente não funcionava.** Selecionar já exige a
+pinça fechada (ratio < 0,42); apertar os dedos ainda mais para encolher é um
+movimento pequeno e rápido, enquanto abrir para crescer é maior e mais lento.
+Os dois sofriam o mesmo problema por um caminho diferente do de cima: durante
+a carência de 0,25 s depois da pinça, `grab.ratio` é continuamente rebaseado
+para o valor atual — necessário para não confundir a convergência do filtro
+com um gesto real (ver acima), mas isso também apaga qualquer gesto genuíno
+que termine dentro da janela. Um aperto rápido cabe inteiro em 250 ms; abrir
+bem os dedos, raramente. `GRAB_SETTLE_SECONDS` caiu para 0,12 s, e o filtro
+da razão (`ratio` em [hand-analyzer.js](src/hand/hand-analyzer.js)) ficou
+menos rígido (beta 0,01 -> 0,04) para reagir mais rápido a um aperto de
+verdade. Mesmo assim, um aperto MUITO rápido ainda pode caber dentro da
+janela menor — por isso também ganhou `SCALE Δ` no painel, mesma lógica do
+`ROLL Δ`: mostra a variação real da razão em %, positiva ao crescer e
+negativa ao reduzir, para a próxima tentativa virar dado. Se `SCALE Δ` mal
+sair do zero ao reduzir, o problema ainda é a janela/filtro; se passar de
+-26% e nada encolher, o suspeito passa a ser o limite mínimo de escala
+(`LIMITS.minScale = 0.2` em [gestures.js](src/gestures.js)) — o objeto pode
+já estar no piso de 20% do tamanho original.
 
 Qual modo está ativo aparece na tela — um rótulo discreto (`↔ Movendo`,
 `⤢ Escala`, `⟳ Girando`, `↕ Altura`, `🤏 Selecionado`) que some sozinho quando
@@ -181,6 +218,36 @@ e nas classes `g-*` de [style.css](style.css).
 
 O touchscreen tem prioridade: enquanto há um dedo na tela, o controle por mão
 fica suspenso, para que os dois nunca escrevam no mesmo transform.
+
+## Vista explodida
+
+Botão **Vista explodida** no HUD (aparece depois de colocar o equipamento):
+separa as peças do gabinete — porta, topo, laterais, fundo, as três fileiras
+de disjuntores, barramentos, grelhas, lâmpadas/placa, prensa-cabos — com uma
+transição suave de 0,6 s. **Remontar** volta tudo ao lugar. Reposicionar o
+equipamento também remonta, para não deixar peças soltas para trás numa nova
+colocação.
+
+**Como funciona**: cada peça é um nó separado no GLB (não só um material —
+ver [tools/make-panel-glb.mjs](tools/make-panel-glb.mjs)), com a direção e
+distância da explosão gravadas em `node.extras`, que o GLTFLoader do
+Three.js copia automaticamente para `object3D.userData.explode`.
+[explode.js](src/explode.js) só lê esse dado — nenhum nome de peça
+hardcoded fora do modelo. Um modelo sem peças marcadas simplesmente não tem
+o que explodir, e o botão fica escondido (`onPlaced(explodable)` em
+[ar-experience.js](src/ar-experience.js)); trocar de modelo no futuro não
+exige tocar em nenhuma lógica aqui, só marcar as peças no gerador do GLB novo.
+
+Duas peças (`Rodape`, `Vao` — o piso do gabinete e o vão interno escuro)
+ficam de fora do mapa de explosão de propósito: servem de esqueleto fixo
+para o resto se afastar, em vez de o gabinete inteiro flutuar sem
+referência. As distâncias de cada peça estão no objeto `EXPLODE` no topo do
+gerador — ajuste ali e rode `node tools/make-panel-glb.mjs` para regenerar.
+
+Escala/gira/move funcionam igual com o gabinete explodido: esses gestos
+mexem no grupo raiz do equipamento, as peças são filhas com posição local —
+a vista explodida e a manipulação por mão/toque não competem pelo mesmo
+transform.
 
 ## As duas camadas de oclusão
 

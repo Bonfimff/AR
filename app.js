@@ -15,6 +15,7 @@ const ui = {
   diagBtn: document.getElementById("diag-btn"),
   depthBtn: document.getElementById("depth-btn"),
   repositionBtn: document.getElementById("reposition-btn"),
+  explodeBtn: document.getElementById("explode-btn"),
   exitBtn: document.getElementById("exit-ar-btn"),
   gestureBadge: document.getElementById("gesture-badge"),
   gestureLegend: document.getElementById("gesture-legend"),
@@ -83,8 +84,11 @@ async function startAR() {
     onDiagnostics: (data, now) => diagnostics.update(data, now),
     onGestureMode: (mode) => gestureHud.showMode(mode),
     onHandDetected: () => gestureHud.maybeShowHandLegend(),
-    onPlaced: () => {
+    onPlaced: (explodable) => {
       ui.repositionBtn.hidden = false;
+      ui.explodeBtn.hidden = !explodable;
+      ui.explodeBtn.textContent = "Vista explodida";
+      ui.explodeBtn.classList.remove("is-on");
     },
     onEnd: () => {
       experience = null;
@@ -98,6 +102,8 @@ async function startAR() {
       ui.gestureLegend.hidden = true;
       ui.hud.hidden = true;
       ui.repositionBtn.hidden = true;
+      ui.explodeBtn.hidden = true;
+      ui.explodeBtn.classList.remove("is-on");
       ui.startScreen.hidden = false;
       ui.startBtn.disabled = false;
       setStatus("");
@@ -107,6 +113,7 @@ async function startAR() {
   ui.startScreen.hidden = true;
   ui.hud.hidden = false;
   ui.repositionBtn.hidden = true;
+  ui.explodeBtn.hidden = true;
 
   try {
     await experience.start();
@@ -148,7 +155,15 @@ async function init() {
   ui.exitBtn.addEventListener("click", () => experience?.end());
   ui.repositionBtn.addEventListener("click", () => {
     ui.repositionBtn.hidden = true;
+    ui.explodeBtn.hidden = true;
+    ui.explodeBtn.classList.remove("is-on");
     experience?.reposition();
+  });
+
+  ui.explodeBtn.addEventListener("click", () => {
+    const { exploded } = experience?.toggleExplode() ?? { exploded: false };
+    ui.explodeBtn.classList.toggle("is-on", exploded);
+    ui.explodeBtn.textContent = exploded ? "Remontar" : "Vista explodida";
   });
 }
 

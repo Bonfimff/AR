@@ -50,8 +50,19 @@ export class HandAnalyzer {
   constructor() {
     this.pinchPoint = new OneEuroVec2({ minCutoff: 1.4, beta: 0.03 });
     this.palmPoint = new OneEuroVec2({ minCutoff: 1.0, beta: 0.02 });
-    this.ratio = new OneEuroFilter({ minCutoff: 1.6, beta: 0.01 });
-    this.rollFilter = new OneEuroFilter({ minCutoff: 1.2, beta: 0.01 });
+    // beta baixo (0.01) segurava bem o ruído de escorço que confundia escala
+    // com os outros gestos — mas também suavizava demais um aperto rápido e
+    // pequeno dos dedos (o gesto de REDUZIR a escala), que se perdia antes de
+    // acumular no limiar. Subido um pouco: o RATIO_THRESHOLD mais alto (ver
+    // hand-controller.js) já assume boa parte do trabalho de rejeitar ruído,
+    // então o filtro pode soltar mais a mão para o movimento rápido de verdade.
+    this.ratio = new OneEuroFilter({ minCutoff: 1.6, beta: 0.04 });
+    // beta mais alto que os outros filtros: um giro de pulso deliberado é
+    // rápido, e o beta baixo herdado do sinal antigo (punho->dedo médio, que
+    // mal se movia) suavizava a maior parte do movimento antes de acumular no
+    // limiar — provável razão de girar ainda não funcionar mesmo depois de
+    // trocar a fonte do sinal.
+    this.rollFilter = new OneEuroFilter({ minCutoff: 1.5, beta: 0.06 });
     this.gate = new HysteresisGate({ onBelow: PINCH_ON, offAbove: PINCH_OFF });
     this.unwrappedRoll = 0;
     this.lastRawRoll = null;

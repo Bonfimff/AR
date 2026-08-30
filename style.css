@@ -108,6 +108,8 @@ canvas {
 
 .hud-buttons {
   display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
   gap: 12px;
   margin-bottom: 16px;
   pointer-events: auto;
@@ -128,6 +130,11 @@ canvas {
 
 .btn-secondary:active {
   background: rgba(255, 255, 255, 0.15);
+}
+
+.btn-secondary.is-on {
+  background: rgba(0, 224, 164, 0.2);
+  border-color: rgba(0, 224, 164, 0.55);
 }
 
 /* Camada de captura de gestos: ocupa a tela inteira, atrás dos controles */

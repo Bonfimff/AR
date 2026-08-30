@@ -5,6 +5,16 @@
  * terceiros e, portanto, sem qualquer dúvida de licença para uso no projeto.
  *
  * Dimensões reais: 0,80 m (L) x 2,00 m (A) x 0,40 m (P), incluindo o rodapé.
+ *
+ * ESTRUTURA EM PEÇAS (não só em materiais): cada componente lógico — porta,
+ * cada fileira de disjuntores, barramentos, grelhas... — vira seu próprio nó
+ * glTF, com a direção/distância da "vista explodida" gravada em
+ * `node.extras.explode`. O GLTFLoader do Three.js copia `extras` para
+ * `object3D.userData` automaticamente, então src/explode.js só precisa ler
+ * `userData.explode` — nenhuma lista de nomes hardcoded fora do modelo.
+ * Peças sem `explode` (Rodape, Vao) são o "esqueleto": ficam paradas,
+ * servindo de referência enquanto o resto se afasta.
+ *
  * Uso: node tools/make-panel-glb.mjs
  */
 import { writeFileSync, mkdirSync } from "node:fs";
@@ -29,8 +39,35 @@ const MATERIALS = [
 ];
 const M = Object.fromEntries(MATERIALS.map((m, i) => [m.name, i]));
 
-// --- acumuladores por material ---
-const groups = MATERIALS.map(() => ({ positions: [], normals: [], indices: [] }));
+// --- peças: nome -> deslocamento (m) na vista explodida. Ausente = parado. ---
+const EXPLODE = {
+  Fundo: [0, 0, -0.35],
+  LateralEsq: [-0.35, 0, 0],
+  LateralDir: [0.35, 0, 0],
+  Topo: [0, 0.35, 0],
+  // Rodape e Vao ficam de fora do mapa: são o esqueleto, não se movem.
+  Porta: [0, 0, 0.55],
+  Fileira1: [0, -0.15, 0.45],
+  Fileira2: [0, 0, 0.55],
+  Fileira3: [0, 0.15, 0.65],
+  Barramentos: [-0.25, 0, 0.25],
+  GrelhaSuperior: [0, 0.15, 0.40],
+  GrelhaInferior: [0, -0.15, 0.40],
+  Indicadores: [0, 0, 0.35],
+  PrensaCabos: [0, -0.20, -0.30],
+};
+
+// --- acumuladores por (peça, material) ---
+const groups = new Map(); // key `${part}|${mat}` -> {part, mat, positions, normals, indices}
+function group(part, mat) {
+  const key = `${part}|${mat}`;
+  let g = groups.get(key);
+  if (!g) {
+    g = { part, mat, positions: [], normals: [], indices: [] };
+    groups.set(key, g);
+  }
+  return g;
+}
 
 function addQuad(g, a, b, c, d, n) {
   const base = g.positions.length / 3;
@@ -42,8 +79,8 @@ function addQuad(g, a, b, c, d, n) {
 }
 
 /** Caixa por centro e tamanho. */
-function box(mat, [cx, cy, cz], [sx, sy, sz]) {
-  const g = groups[mat];
+function box(part, mat, [cx, cy, cz], [sx, sy, sz]) {
+  const g = group(part, mat);
   const x0 = cx - sx / 2, x1 = cx + sx / 2;
   const y0 = cy - sy / 2, y1 = cy + sy / 2;
   const z0 = cz - sz / 2, z1 = cz + sz / 2;
@@ -56,8 +93,8 @@ function box(mat, [cx, cy, cz], [sx, sy, sz]) {
 }
 
 /** Cilindro ao longo de um eixo ('x' | 'y' | 'z'). */
-function cylinder(mat, [cx, cy, cz], radius, length, axis = "z", segments = 12) {
-  const g = groups[mat];
+function cylinder(part, mat, [cx, cy, cz], radius, length, axis = "z", segments = 12) {
+  const g = group(part, mat);
   const half = length / 2;
   const ring = (t) => {
     const a = (t / segments) * Math.PI * 2;
@@ -98,111 +135,123 @@ const PLINTH = 0.1;
 const bodyH = H - PLINTH;
 const bodyY = PLINTH + bodyH / 2;
 
-// rodapé e corpo
-box(M.Ferragem, [0, PLINTH / 2, 0], [W - 0.04, PLINTH, D - 0.04]);
-box(M.Corpo, [0, bodyY, -D / 2 + 0.02], [W, bodyH, 0.04]);            // costas
-box(M.Corpo, [-W / 2 + 0.02, bodyY, 0], [0.04, bodyH, D]);            // lateral esq.
-box(M.Corpo, [W / 2 - 0.02, bodyY, 0], [0.04, bodyH, D]);             // lateral dir.
-box(M.Corpo, [0, H - 0.02, 0], [W, 0.04, D]);                          // topo
-box(M.Vao, [0, bodyY, 0], [W - 0.08, bodyH - 0.04, D - 0.08]);        // interior escuro
+// rodapé (esqueleto: não explode) e casca do corpo (explode em 4 direções)
+box("Rodape", M.Ferragem, [0, PLINTH / 2, 0], [W - 0.04, PLINTH, D - 0.04]);
+box("Fundo", M.Corpo, [0, bodyY, -D / 2 + 0.02], [W, bodyH, 0.04]);
+box("LateralEsq", M.Corpo, [-W / 2 + 0.02, bodyY, 0], [0.04, bodyH, D]);
+box("LateralDir", M.Corpo, [W / 2 - 0.02, bodyY, 0], [0.04, bodyH, D]);
+box("Topo", M.Corpo, [0, H - 0.02, 0], [W, 0.04, D]);
+box("Vao", M.Vao, [0, bodyY, 0], [W - 0.08, bodyH - 0.04, D - 0.08]); // interior escuro (esqueleto)
 
-// porta (recuada) e moldura
+// porta (recuada), moldura, dobradiças e maçaneta — tudo uma peça só
 const doorZ = D / 2 - 0.015;
-box(M.Porta, [0, bodyY, doorZ], [W - 0.06, bodyH - 0.06, 0.03]);
-box(M.Ferragem, [0, bodyY + (bodyH - 0.06) / 2, doorZ], [W - 0.06, 0.012, 0.034]);
-box(M.Ferragem, [0, bodyY - (bodyH - 0.06) / 2, doorZ], [W - 0.06, 0.012, 0.034]);
-
-// dobradiças e maçaneta
+box("Porta", M.Porta, [0, bodyY, doorZ], [W - 0.06, bodyH - 0.06, 0.03]);
+box("Porta", M.Ferragem, [0, bodyY + (bodyH - 0.06) / 2, doorZ], [W - 0.06, 0.012, 0.034]);
+box("Porta", M.Ferragem, [0, bodyY - (bodyH - 0.06) / 2, doorZ], [W - 0.06, 0.012, 0.034]);
 for (const y of [0.45, 1.0, 1.55]) {
-  cylinder(M.Ferragem, [-W / 2 + 0.03, y, doorZ], 0.018, 0.09, "y");
+  cylinder("Porta", M.Ferragem, [-W / 2 + 0.03, y, doorZ], 0.018, 0.09, "y");
 }
-box(M.Ferragem, [W / 2 - 0.10, 1.05, doorZ + 0.03], [0.05, 0.16, 0.03]);
-cylinder(M.Ferragem, [W / 2 - 0.10, 1.05, doorZ + 0.07], 0.014, 0.10, "y");
+box("Porta", M.Ferragem, [W / 2 - 0.10, 1.05, doorZ + 0.03], [0.05, 0.16, 0.03]);
+cylinder("Porta", M.Ferragem, [W / 2 - 0.10, 1.05, doorZ + 0.07], 0.014, 0.10, "y");
 
-// grelhas de ventilação (duas, com lâminas)
-for (const baseY of [1.72, 0.30]) {
+// grelhas de ventilação (duas peças, cada uma com suas lâminas)
+for (const [part, baseY] of [["GrelhaSuperior", 1.72], ["GrelhaInferior", 0.30]]) {
   for (let i = 0; i < 10; i += 1) {
-    box(M.Vao, [-0.18, baseY + i * 0.014, doorZ + 0.016], [0.26, 0.006, 0.004]);
-    box(M.Vao, [0.18, baseY + i * 0.014, doorZ + 0.016], [0.26, 0.006, 0.004]);
+    box(part, M.Vao, [-0.18, baseY + i * 0.014, doorZ + 0.016], [0.26, 0.006, 0.004]);
+    box(part, M.Vao, [0.18, baseY + i * 0.014, doorZ + 0.016], [0.26, 0.006, 0.004]);
   }
 }
 
-// interior: trilhos DIN com disjuntores
+// interior: trilhos DIN com disjuntores — uma peça por fileira
 const railZ = 0.02;
 for (let row = 0; row < 3; row += 1) {
+  const part = `Fileira${row + 1}`;
   const y = 0.72 + row * 0.30;
-  box(M.Ferragem, [0, y - 0.035, railZ], [W - 0.16, 0.012, 0.03]);
+  box(part, M.Ferragem, [0, y - 0.035, railZ], [W - 0.16, 0.012, 0.03]);
   for (let i = 0; i < 12; i += 1) {
     const x = -0.28 + i * 0.051;
-    box(M.Disjuntor, [x, y, railZ + 0.025], [0.044, 0.075, 0.05]);
-    box(M.Alavanca, [x, y + 0.016, railZ + 0.055], [0.018, 0.026, 0.014]);
+    box(part, M.Disjuntor, [x, y, railZ + 0.025], [0.044, 0.075, 0.05]);
+    box(part, M.Alavanca, [x, y + 0.016, railZ + 0.055], [0.018, 0.026, 0.014]);
   }
 }
 
 // barramentos de cobre
 for (const x of [-0.30, -0.26, -0.22]) {
-  box(M.Barramento, [x, 1.35, railZ - 0.02], [0.012, 0.62, 0.006]);
+  box("Barramentos", M.Barramento, [x, 1.35, railZ - 0.02], [0.012, 0.62, 0.006]);
 }
 
 // lâmpadas de sinalização e placa de identificação
 const lamps = [M.LampadaVerde, M.LampadaVermelha, M.LampadaAmbar];
 for (let i = 0; i < 6; i += 1) {
-  cylinder(lamps[i % 3], [-0.24 + i * 0.095, 1.62, doorZ + 0.022], 0.014, 0.014, "z");
+  cylinder("Indicadores", lamps[i % 3], [-0.24 + i * 0.095, 1.62, doorZ + 0.022], 0.014, 0.014, "z");
 }
-box(M.Placa, [0, 1.45, doorZ + 0.018], [0.34, 0.10, 0.004]);
+box("Indicadores", M.Placa, [0, 1.45, doorZ + 0.018], [0.34, 0.10, 0.004]);
 
 // prensa-cabos na base
 for (let i = 0; i < 6; i += 1) {
-  cylinder(M.Ferragem, [-0.25 + i * 0.10, PLINTH + 0.04, -D / 2 + 0.03], 0.016, 0.05, "z");
+  cylinder("PrensaCabos", M.Ferragem, [-0.25 + i * 0.10, PLINTH + 0.04, -D / 2 + 0.03], 0.016, 0.05, "z");
 }
 
 // ---------------------------------------------------------------- export GLB
 const chunks = [];
 const accessors = [];
 const bufferViews = [];
-const primitives = [];
 let offset = 0;
 
-const align = (n) => (n % 4 ? n + (4 - (n % 4)) : n);
+const push = (buf, target) => {
+  const start = offset;
+  chunks.push(buf);
+  offset += buf.length;
+  bufferViews.push({ buffer: 0, byteOffset: start, byteLength: buf.length, target });
+  return bufferViews.length - 1;
+};
 
-for (let mat = 0; mat < groups.length; mat += 1) {
-  const g = groups[mat];
+// Agrupa os acumuladores (peça, material) em primitivas por PEÇA — é isso que
+// transforma cada componente lógico num nó/mesh independente no glTF.
+const byPart = new Map();
+for (const g of groups.values()) {
   if (!g.indices.length) continue;
+  if (!byPart.has(g.part)) byPart.set(g.part, []);
+  byPart.get(g.part).push(g);
+}
 
-  const pos = Buffer.from(new Float32Array(g.positions).buffer);
-  const nrm = Buffer.from(new Float32Array(g.normals).buffer);
-  const idx = Buffer.from(new Uint32Array(g.indices).buffer);
+const meshes = [];
+const nodes = [];
+for (const [part, partGroups] of byPart) {
+  const primitives = [];
+  for (const g of partGroups) {
+    const pos = Buffer.from(new Float32Array(g.positions).buffer);
+    const nrm = Buffer.from(new Float32Array(g.normals).buffer);
+    const idx = Buffer.from(new Uint32Array(g.indices).buffer);
 
-  const min = [Infinity, Infinity, Infinity];
-  const max = [-Infinity, -Infinity, -Infinity];
-  for (let i = 0; i < g.positions.length; i += 3) {
-    for (let k = 0; k < 3; k += 1) {
-      min[k] = Math.min(min[k], g.positions[i + k]);
-      max[k] = Math.max(max[k], g.positions[i + k]);
+    const min = [Infinity, Infinity, Infinity];
+    const max = [-Infinity, -Infinity, -Infinity];
+    for (let i = 0; i < g.positions.length; i += 3) {
+      for (let k = 0; k < 3; k += 1) {
+        min[k] = Math.min(min[k], g.positions[i + k]);
+        max[k] = Math.max(max[k], g.positions[i + k]);
+      }
     }
+
+    const posView = push(pos, 34962);
+    const nrmView = push(nrm, 34962);
+    const idxView = push(idx, 34963);
+
+    accessors.push({ bufferView: posView, componentType: 5126, count: g.positions.length / 3, type: "VEC3", min, max });
+    accessors.push({ bufferView: nrmView, componentType: 5126, count: g.normals.length / 3, type: "VEC3" });
+    accessors.push({ bufferView: idxView, componentType: 5125, count: g.indices.length, type: "SCALAR" });
+
+    primitives.push({
+      attributes: { POSITION: accessors.length - 3, NORMAL: accessors.length - 2 },
+      indices: accessors.length - 1,
+      material: g.mat,
+    });
   }
 
-  const push = (buf, target) => {
-    const start = offset;
-    chunks.push(buf);
-    offset += buf.length;
-    bufferViews.push({ buffer: 0, byteOffset: start, byteLength: buf.length, target });
-    return bufferViews.length - 1;
-  };
-
-  const posView = push(pos, 34962);
-  const nrmView = push(nrm, 34962);
-  const idxView = push(idx, 34963);
-
-  accessors.push({ bufferView: posView, componentType: 5126, count: g.positions.length / 3, type: "VEC3", min, max });
-  accessors.push({ bufferView: nrmView, componentType: 5126, count: g.normals.length / 3, type: "VEC3" });
-  accessors.push({ bufferView: idxView, componentType: 5125, count: g.indices.length, type: "SCALAR" });
-
-  primitives.push({
-    attributes: { POSITION: accessors.length - 3, NORMAL: accessors.length - 2 },
-    indices: accessors.length - 1,
-    material: mat,
-  });
+  meshes.push({ name: part, primitives });
+  const node = { mesh: meshes.length - 1, name: part };
+  if (EXPLODE[part]) node.extras = { explode: EXPLODE[part] };
+  nodes.push(node);
 }
 
 const bin = Buffer.concat(chunks);
@@ -211,9 +260,9 @@ const binPadded = bin.length % 4 ? Buffer.concat([bin, Buffer.alloc(4 - (bin.len
 const gltf = {
   asset: { version: "2.0", generator: "quadro-eletrico-procedural" },
   scene: 0,
-  scenes: [{ nodes: [0] }],
-  nodes: [{ mesh: 0, name: "QuadroEletrico" }],
-  meshes: [{ name: "QuadroEletrico", primitives }],
+  scenes: [{ nodes: nodes.map((_, i) => i) }],
+  nodes,
+  meshes,
   materials: MATERIALS.map((m) => ({
     name: m.name,
     pbrMetallicRoughness: {
@@ -251,8 +300,10 @@ writeFileSync(
   Buffer.concat([header, chunk(jsonChunk, 0x4e4f534a), chunk(binPadded, 0x004e4942)])
 );
 
-const tris = groups.reduce((sum, g) => sum + g.indices.length / 3, 0);
+const tris = [...groups.values()].reduce((sum, g) => sum + g.indices.length / 3, 0);
+const explodable = nodes.filter((n) => n.extras).length;
 console.log(
-  `models/equipamento.glb gerado — ${primitives.length} primitivas, ${tris} triângulos, ` +
+  `models/equipamento.glb gerado — ${nodes.length} peças (${explodable} explodem, ` +
+    `${nodes.length - explodable} fixas), ${tris} triângulos, ` +
     `${(12 + 8 + jsonChunk.length + 8 + binPadded.length) / 1024 | 0} KB`
 );

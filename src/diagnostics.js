@@ -15,6 +15,8 @@ const ROWS = [
   ["pinch", "PINCH"],
   ["object", "OBJECT"],
   ["state", "STATE"],
+  ["rollDelta", "ROLL Δ"],
+  ["scaleDelta", "SCALE Δ"],
   ["fps", "FPS"],
 ];
 

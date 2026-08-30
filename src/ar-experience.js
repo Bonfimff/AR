@@ -12,6 +12,8 @@ import { getModel } from "./models.js";
 import { createHandProvider } from "./hand/index.js";
 import { HandController, HAND_STATE } from "./hand-controller.js";
 import { HandOcclusion } from "./hand-occlusion.js";
+import { PlacementGuide } from "./placement-guide.js";
+import { ExplodeController } from "./explode.js";
 import { FpsMeter } from "./diagnostics.js";
 
 /**
@@ -66,6 +68,7 @@ export class ARExperience {
     this.handController = null;
     this.cpuOcclusion = null;
     this.handMask = null;
+    this.explode = null;
     this.fps = new FpsMeter();
   }
 
@@ -86,6 +89,7 @@ export class ARExperience {
         "depth-sensing",
         "hand-tracking",
         "camera-access",
+        "plane-detection",
       ],
       domOverlay: { root: this.overlayRoot },
       depthSensing: DEPTH_SENSING_INIT,
@@ -113,6 +117,10 @@ export class ARExperience {
     this.depthStatus.cpu = Boolean(this.cpuOcclusion);
     console.info("[AR] depth-sensing:", this.depthStatus);
 
+    this.placementGuide.setPlaneSupported(
+      Boolean(this.session.enabledFeatures?.includes("plane-detection"))
+    );
+
     this.referenceSpace = this.renderer.xr.getReferenceSpace();
     this.viewerSpace = await this.session.requestReferenceSpace("viewer");
     this.hitTestSource = await this.session.requestHitTestSource({ space: this.viewerSpace });
@@ -120,6 +128,7 @@ export class ARExperience {
     try {
       this.equipment = await modelPromise;
       this.selectionIndicator = createSelectionIndicator(this.equipment);
+      this.explode = new ExplodeController(this.equipment);
       this.handController?.setTarget(this.equipment);
     } catch (error) {
       this.onStatus(`Falha ao carregar ${this.model.url}.`);
@@ -132,7 +141,7 @@ export class ARExperience {
     // Reportado só agora para que o aviso já saiba se há máscara de mão.
     this.depthStatus.mask = Boolean(this.handMask);
     this.onDepthStatus?.(this.depthStatus);
-    this.onStatus("Aponte para uma superfície e toque para posicionar");
+    this.onStatus("Aponte para uma superfície e mova o celular devagar");
     this.renderer.setAnimationLoop((time, frame) => this.render(time, frame));
   }
 
@@ -247,6 +256,9 @@ export class ARExperience {
     this.reticle.visible = false;
     this.scene.add(this.reticle);
 
+    this.placementGuide = new PlacementGuide();
+    this.scene.add(this.placementGuide.outline);
+
     this.anchorGroup = new THREE.Group();
     this.anchorGroup.visible = false;
     this.scene.add(this.anchorGroup);
@@ -349,7 +361,16 @@ export class ARExperience {
     this.placementRequested = false;
     this.anchorGroup.visible = false;
     this.detachAnchor();
-    this.onStatus("Aponte para uma superfície e toque para posicionar");
+    this.placementGuide.reset();
+    this.explode?.reset(); // reposicionar remonta: evita mover peças soltas junto
+    this.onStatus("Aponte para uma superfície e mova o celular devagar");
+  }
+
+  /** Alterna vista montada/explodida. Devolve {explodable, exploded}. */
+  toggleExplode() {
+    if (!this.explode?.explodable) return { explodable: false, exploded: false };
+    const exploded = this.explode.toggle();
+    return { explodable: true, exploded };
   }
 
   detachAnchor() {
@@ -376,7 +397,7 @@ export class ARExperience {
     if (this.equipment.parent !== this.anchorGroup) this.anchorGroup.add(this.equipment);
 
     this.onStatus(this.hasInteracted ? "" : "Toque no objeto para manipular");
-    this.onPlaced();
+    this.onPlaced(this.explode?.explodable ?? false);
 
     if (this.anchorsSupported) {
       hitResult.createAnchor().then(
@@ -407,6 +428,19 @@ export class ARExperience {
           this.reticle.matrix.fromArray(pose.transform.matrix);
           if (this.placementRequested) this.place(results[0], pose);
         }
+
+        // A colocação pode ter acontecido nesta mesma passada (placementRequested):
+        // nesse caso o texto já foi definido por place(), e não deve ser sobrescrito.
+        if (this.awaitingPlacement) {
+          this.placementGuide.update(
+            frame,
+            this.referenceSpace,
+            view?.transform?.position ?? null,
+            pose?.transform?.position ?? null
+          );
+          const hint = this.placementGuide.hint(Boolean(pose));
+          this.onStatus(hint ?? "Toque para posicionar");
+        }
       } else {
         if (this.anchor) {
           // A âncora é reajustada pelo ARCore conforme o mapa do ambiente evolui.
@@ -418,6 +452,7 @@ export class ARExperience {
         }
         this.gestures?.update(delta);
         this.updateHand(view, time, delta);
+        this.explode?.update(delta);
       }
 
       this.cpuOcclusion?.update(frame, view, this.getXRCamera(), this.renderer);
@@ -486,6 +521,14 @@ export class ARExperience {
         pinch: hand?.pinching ? "ON" : "OFF",
         object: this.selected ? "SELECTED" : "FREE",
         state: this.handController?.state ?? "—",
+        rollDelta:
+          this.handController?.rollDeltaDeg != null
+            ? `${this.handController.rollDeltaDeg.toFixed(1)}°`
+            : "—",
+        scaleDelta:
+          this.handController?.scaleDeltaPct != null
+            ? `${this.handController.scaleDeltaPct.toFixed(0)}%`
+            : "—",
         fps: this.fps.value,
       },
       time
@@ -519,6 +562,9 @@ export class ARExperience {
     this.cpuOcclusion = null;
     this.handMask?.dispose();
     this.handMask = null;
+    this.placementGuide?.dispose();
+    this.placementGuide = null;
+    this.explode = null;
     this.handProvider?.dispose();
     this.handProvider = null;
 

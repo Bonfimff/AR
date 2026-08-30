@@ -104,6 +104,7 @@ async function startAR() {
     onDiagnostics: (data, now) => diagnostics.update(data, now),
     onGestureMode: (mode) => gestureHud.showMode(mode),
     onHandDetected: () => gestureHud.maybeShowHandLegend(),
+    onPanelAction: (message) => gestureHud.flash(message),
     onScale: (scale) => {
       // Vem do gesto de pinça de dois dedos; o slider só reflete, não reage.
       ui.scaleRange.value = String(scaleToSlider(scale));

@@ -47,6 +47,21 @@ export class GestureHud {
     }
   }
 
+  /**
+   * Mensagem passageira no mesmo lugar do rótulo de gesto ("Circuito 03
+   * desligado", "Porta aberta"). Reusa o badge de propósito: dois avisos
+   * competindo pela mesma região da tela seria pior que um só.
+   */
+  flash(text, ms = 1800) {
+    if (!text) return;
+    clearTimeout(this._selectedTimer);
+    this.badgeEl.hidden = false;
+    this.badgeEl.textContent = text;
+    this._selectedTimer = setTimeout(() => {
+      this.badgeEl.hidden = true;
+    }, ms);
+  }
+
   /** Mostra a legenda de gestos da mão uma única vez neste aparelho. */
   maybeShowHandLegend() {
     try {

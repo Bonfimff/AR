@@ -54,6 +54,28 @@ const EXPLODE = {
   PrensaCabos: [0, -0.20, -0.30],
 };
 
+// --- metadados de peça: hierarquia e comportamento ---
+//
+// Uma peça pode ser FILHA de outra (`parent`). É assim que cada disjuntor vira
+// um nó clicável por si só, sem deixar de acompanhar a fileira na vista
+// explodida: a explosão move o pai, os filhos vão junto pela hierarquia.
+//
+// `extras` vai direto para `node.extras` do glTF e reaparece em
+// `object3D.userData` — mesmo mecanismo já usado pelo `explode`. Chaves:
+//   circuitId — elemento correspondente no modelo elétrico (src/circuits.js)
+//   role      — "lever": alavanca que se move ao manobrar o disjuntor
+//   hinge     — {pivot, axis, openDeg}: a peça abre girando, não se afasta
+const partMeta = new Map();
+function declare(name, meta = {}) {
+  const previous = partMeta.get(name) ?? {};
+  partMeta.set(name, {
+    ...previous,
+    ...meta,
+    extras: { ...(previous.extras ?? {}), ...(meta.extras ?? {}) },
+  });
+  return name;
+}
+
 // --- acumuladores por (peça, material) ---
 const groups = new Map(); // key `${part}|${mat}` -> {part, mat, positions, normals, indices}
 function group(part, mat) {
@@ -138,7 +160,12 @@ box("Fundo", M.Corpo, [0, bodyY, -D / 2 + 0.02], [W, bodyH, 0.04]);
 box("LateralEsq", M.Corpo, [-W / 2 + 0.02, bodyY, 0], [0.04, bodyH, D]);
 box("LateralDir", M.Corpo, [W / 2 - 0.02, bodyY, 0], [0.04, bodyH, D]);
 box("Topo", M.Corpo, [0, H - 0.02, 0], [W, 0.04, D]);
-box("Vao", M.Vao, [0, bodyY, 0], [W - 0.08, bodyH - 0.04, D - 0.08]); // interior escuro (esqueleto)
+// Fundo escuro do interior. Era uma caixa MACIÇA ocupando todo o vão — o que
+// funcionava enquanto a porta nunca abria (só se via através das grelhas), mas
+// engolia os disjuntores assim que a porta passou a girar. Agora é um painel
+// raso, atrás dos trilhos: continua dando profundidade escura vista de fora e
+// deixa o interior à mostra com a porta aberta.
+box("Vao", M.Vao, [0, bodyY, -0.08], [W - 0.08, bodyH - 0.04, 0.16]);
 
 // porta (recuada), moldura, dobradiças e maçaneta — tudo uma peça só
 const doorZ = D / 2 - 0.015;
@@ -161,16 +188,40 @@ for (const baseY of [1.72, 0.30]) {
   }
 }
 
-// interior: trilhos DIN com disjuntores — uma peça por fileira
+// A porta ABRE GIRANDO, em vez de se afastar: dobradiças na aresta esquerda.
+// Rotação em torno de +Y é x' = x·cos + z·sin / z' = -x·sin + z·cos, então o
+// ângulo tem de ser NEGATIVO para a folha varrer para a frente (+z).
+declare("Porta", {
+  extras: {
+    hinge: { pivot: [-W / 2 + 0.03, 0, doorZ], axis: [0, 1, 0], openDeg: -115 },
+  },
+});
+
+// interior: trilhos DIN com disjuntores. Cada disjuntor é um nó próprio,
+// filho da fileira — clicável individualmente, mas ainda explodindo junto com
+// ela. A alavanca é filha do disjuntor para poder se mover ao manobrar.
 const railZ = 0.02;
+const breakers = []; // {id, label} na ordem física, para montar o netlist
+let circuitCount = 0;
+
 for (let row = 0; row < 3; row += 1) {
-  const part = `Fileira${row + 1}`;
+  const rowPart = `Fileira${row + 1}`;
   const y = 0.72 + row * 0.30;
-  box(part, M.Ferragem, [0, y - 0.035, railZ], [W - 0.16, 0.012, 0.03]);
+  box(rowPart, M.Ferragem, [0, y - 0.035, railZ], [W - 0.16, 0.012, 0.03]);
+
   for (let i = 0; i < 12; i += 1) {
     const x = -0.28 + i * 0.051;
-    box(part, M.Disjuntor, [x, y, railZ + 0.025], [0.044, 0.075, 0.05]);
-    box(part, M.Alavanca, [x, y + 0.016, railZ + 0.055], [0.018, 0.026, 0.014]);
+    // O primeiro da fileira de baixo é o geral; o resto são circuitos.
+    const geral = row === 0 && i === 0;
+    const id = geral ? "geral" : `c${String((circuitCount += 1)).padStart(2, "0")}`;
+    const label = geral ? "Disjuntor geral" : `Circuito ${id.slice(1)}`;
+    breakers.push({ id, label, geral });
+
+    const body = declare(`Disj-${id}`, { parent: rowPart, extras: { circuitId: id } });
+    box(body, M.Disjuntor, [x, y, railZ + 0.025], [0.044, 0.075, 0.05]);
+
+    const lever = declare(`Alav-${id}`, { parent: body, extras: { role: "lever" } });
+    box(lever, M.Alavanca, [x, y + 0.016, railZ + 0.055], [0.018, 0.026, 0.014]);
   }
 }
 
@@ -179,13 +230,49 @@ for (const x of [-0.30, -0.26, -0.22]) {
   box("Barramentos", M.Barramento, [x, 1.35, railZ - 0.02], [0.012, 0.62, 0.006]);
 }
 
-// lâmpadas de sinalização e placa de identificação: também MONTADAS NA PORTA
-// (furos na chapa frontal), então pertencem à peça "Porta".
-const lamps = [M.LampadaVerde, M.LampadaVermelha, M.LampadaAmbar];
+// lâmpadas de sinalização: montadas na porta (furos na chapa frontal), então
+// são FILHAS de "Porta" e viajam com ela. Cada uma é nó próprio para poder
+// acender/apagar sozinha conforme o circuito que a alimenta.
+const lampMaterials = [M.LampadaVerde, M.LampadaVermelha, M.LampadaAmbar];
+const lampIds = [];
 for (let i = 0; i < 6; i += 1) {
-  cylinder("Porta", lamps[i % 3], [-0.24 + i * 0.095, 1.62, doorZ + 0.022], 0.014, 0.014, "z");
+  const id = `lamp${String(i + 1).padStart(2, "0")}`;
+  lampIds.push(id);
+  const p = declare(`Lampada-${id}`, { parent: "Porta", extras: { circuitId: id } });
+  cylinder(p, lampMaterials[i % 3], [-0.24 + i * 0.095, 1.62, doorZ + 0.022], 0.014, 0.014, "z");
 }
 box("Porta", M.Placa, [0, 1.45, doorZ + 0.018], [0.34, 0.10, 0.004]);
+
+// --- esquema elétrico embutido no próprio modelo -------------------------
+// Vai em `scene.extras` e é lido por src/panel.js, que o entrega a
+// CircuitModel.fromJSON. O GLB carrega geometria E esquema: trocar de modelo
+// não exige mexer em nenhuma lógica, e o formato é exatamente o que
+// circuits.js já serializa.
+const circuitElements = [
+  { id: "entrada", kind: "source", label: "Alimentação", feeds: ["geral"] },
+  {
+    id: "geral",
+    kind: "breaker",
+    label: "Disjuntor geral",
+    feeds: breakers.filter((b) => !b.geral).map((b) => b.id),
+  },
+  ...breakers
+    .filter((b) => !b.geral)
+    .map((b, i) => ({
+      id: b.id,
+      kind: "breaker",
+      label: b.label,
+      // As seis primeiras alimentam as lâmpadas de sinalização da porta; as
+      // demais existem no quadro mas ainda não têm carga modelada.
+      feeds: i < lampIds.length ? [lampIds[i]] : [],
+    })),
+  ...lampIds.map((id, i) => ({
+    id,
+    kind: "lamp",
+    label: `Sinalizador ${i + 1}`,
+    feeds: [],
+  })),
+];
 
 // prensa-cabos na base
 for (let i = 0; i < 6; i += 1) {
@@ -215,9 +302,17 @@ for (const g of groups.values()) {
   byPart.get(g.part).push(g);
 }
 
+// Toda peça vira nó, mesmo uma que só exista para agrupar filhas (sem
+// geometria própria) — daí o Set unindo quem tem geometria e quem foi apenas
+// declarada como pai.
+const partNames = new Set([...byPart.keys(), ...partMeta.keys()]);
+
 const meshes = [];
 const nodes = [];
-for (const [part, partGroups] of byPart) {
+const nodeIndex = new Map();
+
+for (const part of partNames) {
+  const partGroups = byPart.get(part) ?? [];
   const primitives = [];
   for (const g of partGroups) {
     const pos = Buffer.from(new Float32Array(g.positions).buffer);
@@ -248,10 +343,32 @@ for (const [part, partGroups] of byPart) {
     });
   }
 
-  meshes.push({ name: part, primitives });
-  const node = { mesh: meshes.length - 1, name: part };
-  if (EXPLODE[part]) node.extras = { explode: EXPLODE[part] };
+  const node = { name: part };
+  if (primitives.length) {
+    meshes.push({ name: part, primitives });
+    node.mesh = meshes.length - 1;
+  }
+
+  const extras = { ...(partMeta.get(part)?.extras ?? {}) };
+  if (EXPLODE[part]) extras.explode = EXPLODE[part];
+  if (Object.keys(extras).length) node.extras = extras;
+
+  nodeIndex.set(part, nodes.length);
   nodes.push(node);
+}
+
+// Hierarquia: só depois de TODOS os nós existirem, senão a ordem de declaração
+// das peças passaria a importar.
+const rootNodes = [];
+for (const part of partNames) {
+  const parent = partMeta.get(part)?.parent;
+  if (parent == null) {
+    rootNodes.push(nodeIndex.get(part));
+    continue;
+  }
+  if (!nodeIndex.has(parent)) throw new Error(`Peça "${part}": pai "${parent}" não existe`);
+  const parentNode = nodes[nodeIndex.get(parent)];
+  (parentNode.children ??= []).push(nodeIndex.get(part));
 }
 
 const bin = Buffer.concat(chunks);
@@ -260,7 +377,9 @@ const binPadded = bin.length % 4 ? Buffer.concat([bin, Buffer.alloc(4 - (bin.len
 const gltf = {
   asset: { version: "2.0", generator: "quadro-eletrico-procedural" },
   scene: 0,
-  scenes: [{ nodes: nodes.map((_, i) => i) }],
+  // O esquema elétrico viaja na cena, não num nó: descreve o conjunto, e o
+  // GLTFLoader entrega `scene.extras` em `gltf.scene.userData`.
+  scenes: [{ nodes: rootNodes, extras: { circuits: { version: 1, elements: circuitElements } } }],
   nodes,
   meshes,
   materials: MATERIALS.map((m) => ({
@@ -301,9 +420,10 @@ writeFileSync(
 );
 
 const tris = [...groups.values()].reduce((sum, g) => sum + g.indices.length / 3, 0);
-const explodable = nodes.filter((n) => n.extras).length;
+const explodable = nodes.filter((n) => n.extras?.explode).length;
+const clickable = nodes.filter((n) => n.extras?.circuitId).length;
 console.log(
-  `models/equipamento.glb gerado — ${nodes.length} peças (${explodable} explodem, ` +
-    `${nodes.length - explodable} fixas), ${tris} triângulos, ` +
-    `${(12 + 8 + jsonChunk.length + 8 + binPadded.length) / 1024 | 0} KB`
+  `models/equipamento.glb gerado — ${nodes.length} nós (${explodable} explodem, ` +
+    `${clickable} ligados a circuito), ${circuitElements.length} elementos elétricos, ` +
+    `${tris} triângulos, ${(12 + 8 + jsonChunk.length + 8 + binPadded.length) / 1024 | 0} KB`
 );

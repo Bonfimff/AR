@@ -48,6 +48,11 @@ export async function loadEquipment(entry) {
   const object = new THREE.Group();
   object.name = "Equipamento";
   object.add(model);
+  // O esquema elétrico vem em `scene.extras` do glTF e o GLTFLoader o entrega
+  // em `gltf.scene.userData`. Sobe para o grupo externo porque é ele que o
+  // resto do app manipula — quem consome (src/panel.js) não deveria precisar
+  // saber que existe um wrapper.
+  if (model.userData?.circuits) object.userData.circuits = model.userData.circuits;
   object.userData.size = size;
   object.userData.footprint = Math.max(Math.hypot(size.x, size.z) / 2, 0.12);
 

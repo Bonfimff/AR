@@ -24,7 +24,7 @@ export const MODELS = {
     fitToDimensions: true,
     // O caminho do GLB não muda quando o modelo muda, então o navegador serve
     // a versão antiga do cache. Incremente ao substituir o arquivo.
-    version: 4, // v4: grelhas/indicadores incorporados à porta, ver tools/make-panel-glb.mjs
+    version: 5, // v5: disjuntores clicáveis, dobradiça e esquema elétrico embutido
   },
 };
 

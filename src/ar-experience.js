@@ -14,6 +14,7 @@ import { HandController, HAND_STATE } from "./hand-controller.js";
 import { HandOcclusion } from "./hand-occlusion.js";
 import { PlacementGuide } from "./placement-guide.js";
 import { ExplodeController } from "./explode.js";
+import { PanelController } from "./panel.js";
 import { FpsMeter } from "./diagnostics.js";
 
 /**
@@ -40,6 +41,7 @@ export class ARExperience {
     onGestureMode,
     onHandDetected,
     onScale,
+    onPanelAction,
     onEnd,
   }) {
     this.model = getModel(modelId);
@@ -52,7 +54,9 @@ export class ARExperience {
     this.onGestureMode = onGestureMode;
     this.onHandDetected = onHandDetected;
     this.onScale = onScale;
+    this.onPanelAction = onPanelAction;
     this.onEnd = onEnd;
+    this.panel = null;
     this.lastReportedScale = 1;
     this.handEverDetected = false;
 
@@ -131,6 +135,12 @@ export class ARExperience {
     try {
       this.equipment = await modelPromise;
       this.selectionIndicator = createSelectionIndicator(this.equipment);
+      // Ordem importa: o PanelController reparenteia a porta sob um pivô de
+      // dobradiça, e o ExplodeController guarda a posição de repouso de cada
+      // peça na construção. Invertido, a porta explodiria a partir do lugar
+      // errado.
+      this.panel = new PanelController(this.equipment);
+      this.panel.onAction = (message) => this.onPanelAction?.(message);
       this.explode = new ExplodeController(this.equipment);
       this.handController?.setTarget(this.equipment);
     } catch (error) {
@@ -318,20 +328,31 @@ export class ARExperience {
     if (!this.equipment) return;
 
     const hitObject = this.raycastEquipment(clientX, clientY);
-    if (hitObject) this.setSelected(true);
-    else if (this.selected) this.setSelected(false);
+    if (!hitObject) {
+      if (this.selected) this.setSelected(false);
+      return;
+    }
+
+    // Com o equipamento JÁ selecionado, um toque numa peça com função
+    // (disjuntor, porta) opera a peça. Antes disso o toque só seleciona — do
+    // contrário seria fácil desligar um circuito sem querer ao mirar no
+    // equipamento pela primeira vez.
+    if (this.selected && this.panel?.handlePick(hitObject)) return;
+    this.setSelected(true);
   }
 
   raycastEquipment(clientX, clientY) {
     const camera = this.getXRCamera();
-    if (!camera) return false;
+    if (!camera) return null;
     const rect = this.gestureLayer.getBoundingClientRect();
     this._ndc.set(
       ((clientX - rect.left) / rect.width) * 2 - 1,
       -((clientY - rect.top) / rect.height) * 2 + 1
     );
     this.raycaster.setFromCamera(this._ndc, camera);
-    return this.raycaster.intersectObject(this.equipment, true).length > 0;
+    // O objeto acertado, não só "acertou algo": a interação por peça precisa
+    // saber QUAL peça.
+    return this.raycaster.intersectObject(this.equipment, true)[0]?.object ?? null;
   }
 
   setSelected(selected) {
@@ -366,6 +387,7 @@ export class ARExperience {
     this.detachAnchor();
     this.placementGuide.reset();
     this.explode?.reset(); // reposicionar remonta: evita mover peças soltas junto
+    this.panel?.reset(); // e volta o quadro ao estado de fábrica
     this.onStatus("Aponte para uma superfície e mova o celular devagar");
   }
 
@@ -400,6 +422,9 @@ export class ARExperience {
   /** Alterna vista montada/explodida. Devolve {explodable, exploded}. */
   toggleExplode() {
     if (!this.explode?.explodable) return { explodable: false, exploded: false };
+    // Explodir com a porta aberta jogaria a folha de lado: a direção da
+    // explosão é local ao pivô da dobradiça, que está girado.
+    this.panel?.closeDoor();
     const exploded = this.explode.toggle();
     return { explodable: true, exploded };
   }
@@ -486,6 +511,7 @@ export class ARExperience {
         this.gestures?.update(delta);
         this.updateHand(view, time, delta);
         this.explode?.update(delta);
+        this.panel?.update(delta);
         this.reportScale();
       }
 
@@ -595,6 +621,7 @@ export class ARExperience {
     this.placementGuide?.dispose();
     this.placementGuide = null;
     this.explode = null;
+    this.panel = null;
     this.handProvider?.dispose();
     this.handProvider = null;
 

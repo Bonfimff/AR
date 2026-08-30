@@ -14,6 +14,7 @@ src/ar-experience.js           AR ENGINE: sessão, hit-test, âncora, seleção,
 src/placement-guide.js         orientação de varredura + contorno do plano (plane-detection)
 src/explode.js                 vista explodida: separa as peças do equipamento
 src/circuits.js                MODELO ELÉTRICO: energização, manobra, circuitos (dado puro)
+src/panel.js                   ponte modelo elétrico <-> cena: toque na peça, porta, alavancas
 src/occlusion.js               oclusão por profundidade (WebXR Depth Sensing)
 src/hand-occlusion.js          oclusão da mão por silhueta dos landmarks
 src/gestures.js                GESTURE ENGINE (touchscreen)
@@ -130,6 +131,10 @@ Abra no celular a URL `https://…` gerada.
 10. Toque fora do objeto para desselecionar. **Reposicionar** recoloca. **Sair da AR** encerra.
 11. **Vista explodida**: toque no botão para ver as peças do gabinete se separarem;
     **Remontar** volta tudo ao lugar. Funciona junto com escala/giro/altura normalmente.
+12. **Interação por peça** (com o equipamento selecionado): toque na **porta**
+    para abri-la, e num **disjuntor** para desligar o circuito — as lâmpadas de
+    sinalização alimentadas por ele apagam. O disjuntor geral derruba todas.
+    Um aviso curto no rodapé confirma cada manobra.
 
 Para testar a oclusão: com o objeto colocado, passe a mão entre o celular e o
 equipamento. A mão deve cobrir a parte correspondente do objeto. O aviso no topo da
@@ -310,6 +315,62 @@ de manobra — um circuito apenas desligado não é acusado de desconectado.
 
 Já há `toJSON()`/`fromJSON()` versionados, que serão a base do arquivo que o
 usuário vai baixar. Ainda **não estão ligados a nenhuma UI**.
+
+## Interação por peça
+
+Com o equipamento **já selecionado**, tocar numa peça opera a peça:
+
+| Toque em | Acontece |
+|---|---|
+| porta | abre/fecha girando na dobradiça (0,5 s) |
+| disjuntor ou sua alavanca | liga/desliga o circuito; a alavanca desce |
+| lâmpada de sinalização | informa se está energizada |
+| qualquer outra peça | nada — o toque não é consumido |
+
+Exigir seleção prévia é deliberado: sem isso seria fácil desligar um circuito
+sem querer ao mirar no equipamento pela primeira vez.
+
+[panel.js](src/panel.js) é a **única** classe que conhece as duas metades — o
+modelo elétrico não sabe que existe render, e a cena não decide nada sobre
+energia. Só há tradução nos dois sentidos: toque → manobra no modelo, estado
+do modelo → cor e posição na cena.
+
+Nada é identificado por nome de peça. Tudo vem de `userData` gravado no GLB,
+mesmo mecanismo da vista explodida:
+
+| chave em `node.extras` | efeito |
+|---|---|
+| `circuitId` | liga a peça a um elemento do modelo elétrico |
+| `role: "lever"` | alavanca; desce ao desligar o disjuntor pai |
+| `hinge` | `{pivot, axis, openDeg}`: a peça abre girando |
+| `explode` | deslocamento na vista explodida |
+
+O **esquema elétrico viaja dentro do próprio GLB**, em `scene.extras`, no
+formato que `CircuitModel.fromJSON` já lê. O arquivo carrega geometria *e*
+esquema: um modelo novo não exige tocar em nenhuma lógica.
+
+**Hierarquia de peças.** Cada disjuntor é nó próprio (clicável sozinho) mas
+*filho* da fileira, então continua acompanhando-a na vista explodida; a
+alavanca é filha do disjuntor. O `handlePick` sobe pela hierarquia porque o
+raycast acerta a malha, que pode estar abaixo do nó que carrega o metadado —
+por isso tocar na alavanca manobra o disjuntor.
+
+**A porta gira em torno da dobradiça**, não do próprio centro. Como a
+geometria do GLB está em coordenadas absolutas, a peça é envolvida em runtime
+num grupo posicionado na dobradiça. Isso precisa acontecer **antes** de
+`ExplodeController` ser construído, que guarda a posição de repouso de cada
+peça — invertido, a porta explodiria a partir do lugar errado. Explodir
+fecha a porta primeiro: a direção da explosão é local ao pivô, e com a folha
+aberta a porta sairia de lado.
+
+**Materiais são clonados por carga.** No glTF, peças do mesmo material
+apontam para a mesma instância — apagar uma lâmpada apagaria a outra do mesmo
+tipo.
+
+**Bug que este trabalho revelou**: o interior do gabinete era uma caixa
+*maciça*. Funcionava enquanto a porta nunca abria (só se via através das
+grelhas), mas engolia os 36 disjuntores assim que ela passou a girar. Virou
+um painel raso atrás dos trilhos.
 
 ## WebXR ou app nativo?
 

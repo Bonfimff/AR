@@ -7,7 +7,7 @@
  * Dimensões reais: 0,80 m (L) x 2,00 m (A) x 0,40 m (P), incluindo o rodapé.
  *
  * ESTRUTURA EM PEÇAS (não só em materiais): cada componente lógico — porta,
- * cada fileira de disjuntores, barramentos, grelhas... — vira seu próprio nó
+ * cada disjuntor, barramentos, grelhas... — vira seu próprio nó
  * glTF, com a direção/distância da "vista explodida" gravada em
  * `node.extras.explode`. O GLTFLoader do Three.js copia `extras` para
  * `object3D.userData` automaticamente, então src/explode.js só precisa ler
@@ -36,6 +36,10 @@ const MATERIALS = [
   { name: "LampadaVermelha", color: [0.85, 0.15, 0.15, 1], metallic: 0, roughness: 0.25, emissive: [0.40, 0.05, 0.05] },
   { name: "LampadaAmbar", color: [0.90, 0.65, 0.10, 1], metallic: 0, roughness: 0.25, emissive: [0.40, 0.26, 0.02] },
   { name: "Placa", color: [0.90, 0.90, 0.92, 1], metallic: 0.1, roughness: 0.5 },
+  // Cor definida em runtime (verde ligado / laranja desligado, ver src/panel.js);
+  // aqui vale só o acabamento. Emissive != 0 para o marcador se ler mesmo na
+  // penumbra do interior do gabinete.
+  { name: "Marcador", color: [0.13, 0.77, 0.37, 1], metallic: 0, roughness: 0.3, emissive: [0.06, 0.35, 0.17] },
 ];
 const M = Object.fromEntries(MATERIALS.map((m, i) => [m.name, i]));
 
@@ -47,9 +51,7 @@ const EXPLODE = {
   Topo: [0, 0.35, 0],
   // Rodape e Vao ficam de fora do mapa: são o esqueleto, não se movem.
   Porta: [0, 0, 0.55],
-  Fileira1: [0, -0.15, 0.45],
-  Fileira2: [0, 0, 0.55],
-  Fileira3: [0, 0.15, 0.65],
+  Fileira1: [0, 0, 0.45],
   Barramentos: [-0.25, 0, 0.25],
   PrensaCabos: [0, -0.20, -0.30],
 };
@@ -64,6 +66,7 @@ const EXPLODE = {
 // `object3D.userData` — mesmo mecanismo já usado pelo `explode`. Chaves:
 //   circuitId — elemento correspondente no modelo elétrico (src/circuits.js)
 //   role      — "lever": alavanca que se move ao manobrar o disjuntor
+//               "marker": pastilha que fica verde (ligado) ou laranja
 //   hinge     — {pivot, axis, openDeg}: a peça abre girando, não se afasta
 const partMeta = new Map();
 function declare(name, meta = {}) {
@@ -197,32 +200,40 @@ declare("Porta", {
   },
 });
 
-// interior: trilhos DIN com disjuntores. Cada disjuntor é um nó próprio,
-// filho da fileira — clicável individualmente, mas ainda explodindo junto com
-// ela. A alavanca é filha do disjuntor para poder se mover ao manobrar.
+// interior: TRÊS disjuntores grandes, lado a lado num único trilho DIN.
+//
+// Antes eram 36 miniaturas de 4,4 cm — bonito de ver, impossível de acertar
+// com o dedo em AR: o alvo ficava menor que a imprecisão do toque. Três peças
+// de 16 cm resolvem isso e ainda deixam a função de cada uma óbvia.
+//
+// Cada disjuntor é nó próprio (clicável sozinho) mas filho da fileira, então
+// continua acompanhando-a na vista explodida. Alavanca e marcador são filhos
+// do disjuntor: a alavanca desce ao desligar, o marcador troca de cor.
 const railZ = 0.02;
-const breakers = []; // {id, label} na ordem física, para montar o netlist
-let circuitCount = 0;
+const breakers = [];
 
-for (let row = 0; row < 3; row += 1) {
-  const rowPart = `Fileira${row + 1}`;
-  const y = 0.72 + row * 0.30;
-  box(rowPart, M.Ferragem, [0, y - 0.035, railZ], [W - 0.16, 0.012, 0.03]);
+const LAYOUT = [
+  { id: "geral", label: "Disjuntor geral", x: -0.19 },
+  { id: "c01", label: "Circuito 1", x: 0.0 },
+  { id: "c02", label: "Circuito 2", x: 0.19 },
+];
 
-  for (let i = 0; i < 12; i += 1) {
-    const x = -0.28 + i * 0.051;
-    // O primeiro da fileira de baixo é o geral; o resto são circuitos.
-    const geral = row === 0 && i === 0;
-    const id = geral ? "geral" : `c${String((circuitCount += 1)).padStart(2, "0")}`;
-    const label = geral ? "Disjuntor geral" : `Circuito ${id.slice(1)}`;
-    breakers.push({ id, label, geral });
+const breakerY = 1.16;
+const rowPart = "Fileira1";
+box(rowPart, M.Ferragem, [0, breakerY - 0.15, railZ], [W - 0.16, 0.014, 0.032]);
 
-    const body = declare(`Disj-${id}`, { parent: rowPart, extras: { circuitId: id } });
-    box(body, M.Disjuntor, [x, y, railZ + 0.025], [0.044, 0.075, 0.05]);
+for (const { id, label, x } of LAYOUT) {
+  breakers.push({ id, label, geral: id === "geral" });
 
-    const lever = declare(`Alav-${id}`, { parent: body, extras: { role: "lever" } });
-    box(lever, M.Alavanca, [x, y + 0.016, railZ + 0.055], [0.018, 0.026, 0.014]);
-  }
+  const body = declare(`Disj-${id}`, { parent: rowPart, extras: { circuitId: id } });
+  box(body, M.Disjuntor, [x, breakerY, railZ + 0.045], [0.16, 0.26, 0.09]);
+
+  const lever = declare(`Alav-${id}`, { parent: body, extras: { role: "lever" } });
+  box(lever, M.Alavanca, [x, breakerY + 0.05, railZ + 0.10], [0.06, 0.09, 0.026]);
+
+  // Marcador de estado na face frontal, acima da alavanca.
+  const marker = declare(`Marc-${id}`, { parent: body, extras: { role: "marker" } });
+  box(marker, M.Marcador, [x, breakerY - 0.065, railZ + 0.093], [0.075, 0.05, 0.012]);
 }
 
 // barramentos de cobre
@@ -258,13 +269,13 @@ const circuitElements = [
   },
   ...breakers
     .filter((b) => !b.geral)
-    .map((b, i) => ({
+    .map((b, i, all) => ({
       id: b.id,
       kind: "breaker",
       label: b.label,
-      // As seis primeiras alimentam as lâmpadas de sinalização da porta; as
-      // demais existem no quadro mas ainda não têm carga modelada.
-      feeds: i < lampIds.length ? [lampIds[i]] : [],
+      // As lâmpadas de sinalização da porta são divididas igualmente entre os
+      // circuitos: desligar um apaga metade, o geral apaga todas.
+      feeds: lampIds.filter((_, n) => n % all.length === i),
     })),
   ...lampIds.map((id, i) => ({
     id,

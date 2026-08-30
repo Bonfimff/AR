@@ -24,7 +24,7 @@ export const MODELS = {
     fitToDimensions: true,
     // O caminho do GLB não muda quando o modelo muda, então o navegador serve
     // a versão antiga do cache. Incremente ao substituir o arquivo.
-    version: 5, // v5: disjuntores clicáveis, dobradiça e esquema elétrico embutido
+    version: 6, // v6: tres disjuntores grandes com marcador verde/laranja
   },
 };
 

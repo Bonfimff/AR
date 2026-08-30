@@ -14,7 +14,7 @@ src/ar-experience.js           AR ENGINE: sessão, hit-test, âncora, seleção,
 src/placement-guide.js         orientação de varredura + contorno do plano (plane-detection)
 src/explode.js                 vista explodida: separa as peças do equipamento
 src/circuits.js                MODELO ELÉTRICO: energização, manobra, circuitos (dado puro)
-src/panel.js                   ponte modelo elétrico <-> cena: toque na peça, porta, alavancas
+src/panel.js                   ponte modelo elétrico <-> cena: toque na peça, porta, marcadores
 src/occlusion.js               oclusão por profundidade (WebXR Depth Sensing)
 src/hand-occlusion.js          oclusão da mão por silhueta dos landmarks
 src/gestures.js                GESTURE ENGINE (touchscreen)
@@ -47,11 +47,11 @@ e ajuste o `importmap` em `index.html`.
 ## Modelo 3D
 
 O equipamento é um **quadro elétrico industrial de piso**, gerado
-proceduralmente por `tools/make-panel-glb.mjs`: 11 materiais PBR, 2316
-triângulos, 135 KB. Inclui gabinete, rodapé, porta com moldura, dobradiças,
-maçaneta, duas grelhas de ventilação, três trilhos DIN com 36 disjuntores e
-alavancas, barramentos de cobre, seis lâmpadas de sinalização, placa de
-identificação e prensa-cabos.
+proceduralmente por `tools/make-panel-glb.mjs`: 12 materiais PBR, 1536
+triângulos, 102 KB, 25 nós. Inclui gabinete, rodapé, porta com moldura,
+dobradiças, maçaneta, duas grelhas de ventilação, trilho DIN com **três
+disjuntores grandes** (alavanca e marcador de estado), barramentos de cobre,
+seis lâmpadas de sinalização, placa de identificação e prensa-cabos.
 
 | | |
 |---|---|
@@ -132,9 +132,9 @@ Abra no celular a URL `https://…` gerada.
 11. **Vista explodida**: toque no botão para ver as peças do gabinete se separarem;
     **Remontar** volta tudo ao lugar. Funciona junto com escala/giro/altura normalmente.
 12. **Interação por peça** (com o equipamento selecionado): toque na **porta**
-    para abri-la, e num **disjuntor** para desligar o circuito — as lâmpadas de
-    sinalização alimentadas por ele apagam. O disjuntor geral derruba todas.
-    Um aviso curto no rodapé confirma cada manobra.
+    para abri-la, e num dos **três disjuntores** para desligar o circuito — o
+    marcador vira laranja e as lâmpadas alimentadas por ele apagam. O geral
+    deixa os três laranja. Um aviso curto no rodapé confirma cada manobra.
 
 Para testar a oclusão: com o objeto colocado, passe a mão entre o celular e o
 equipamento. A mão deve cobrir a parte correspondente do objeto. O aviso no topo da
@@ -323,9 +323,28 @@ Com o equipamento **já selecionado**, tocar numa peça opera a peça:
 | Toque em | Acontece |
 |---|---|
 | porta | abre/fecha girando na dobradiça (0,5 s) |
-| disjuntor ou sua alavanca | liga/desliga o circuito; a alavanca desce |
+| disjuntor, sua alavanca ou seu marcador | liga/desliga o circuito |
 | lâmpada de sinalização | informa se está energizada |
 | qualquer outra peça | nada — o toque não é consumido |
+
+**São três disjuntores grandes** (16 x 26 cm), não 36 miniaturas. As
+miniaturas de 4,4 cm ficavam menores que a imprecisão do toque em AR: o alvo
+era impossível de acertar com o dedo. Três peças grandes também deixam a
+função de cada uma óbvia — geral, circuito 1, circuito 2, com as seis lâmpadas
+de sinalização divididas entre os dois circuitos.
+
+Cada disjuntor traz um **marcador: verde ligado, laranja desligado**. Laranja
+e não vermelho de propósito — um disjuntor aberto é condição normal de
+operação, não falha, e vermelho já é a cor de um sinalizador de alarme na
+porta.
+
+O marcador segue `isLive`, **não** `closed`: um disjuntor fechado a jusante de
+um geral desligado não está entregando energia, e mostrá-lo verde seria a
+mentira mais perigosa que este painel pode contar. Desligar o geral deixa os
+três laranja.
+
+O curso da alavanca é limitado a 4 cm porque ela passa na frente do marcador —
+mais que isso e ela cobre justamente o indicador que deveria ficar visível.
 
 Exigir seleção prévia é deliberado: sem isso seria fácil desligar um circuito
 sem querer ao mirar no equipamento pela primeira vez.
@@ -342,6 +361,7 @@ mesmo mecanismo da vista explodida:
 |---|---|
 | `circuitId` | liga a peça a um elemento do modelo elétrico |
 | `role: "lever"` | alavanca; desce ao desligar o disjuntor pai |
+| `role: "marker"` | pastilha de estado; verde ligado, laranja desligado |
 | `hinge` | `{pivot, axis, openDeg}`: a peça abre girando |
 | `explode` | deslocamento na vista explodida |
 
@@ -363,7 +383,7 @@ peça — invertido, a porta explodiria a partir do lugar errado. Explodir
 fecha a porta primeiro: a direção da explosão é local ao pivô, e com a folha
 aberta a porta sairia de lado.
 
-**Materiais são clonados por carga.** No glTF, peças do mesmo material
+**Materiais são clonados por peça que muda de cor sozinha.** No glTF, peças do mesmo material
 apontam para a mesma instância — apagar uma lâmpada apagaria a outra do mesmo
 tipo.
 

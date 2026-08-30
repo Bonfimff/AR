@@ -17,7 +17,17 @@ import { CircuitModel, KIND } from "./circuits.js";
  */
 
 const DOOR_SECONDS = 0.5;
-const LEVER_DROP = 0.022; // quanto a alavanca desce ao desligar (m)
+// Curso da alavanca ao desligar. Limitado a 4 cm porque a alavanca passa na
+// frente do marcador: mais que isso e ela cobre justamente o indicador que
+// deveria ficar visivel.
+const LEVER_DROP = 0.04;
+
+// Marcador de estado do disjuntor. Verde = entregando energia; laranja = não.
+// Laranja e não vermelho de propósito: um disjuntor aberto é uma condição
+// normal de operação, não uma falha, e vermelho já é a cor de um sinalizador
+// de alarme na porta.
+const MARKER_ON = new THREE.Color(0x22c55e);
+const MARKER_OFF = new THREE.Color(0xf97316);
 
 export class PanelController {
   constructor(root) {
@@ -36,13 +46,17 @@ export class PanelController {
     root.traverse((obj) => {
       const data = obj.userData ?? {};
       if (data.circuitId) this.entry(data.circuitId).object = obj;
-      if (data.role === "lever") {
-        // A alavanca é filha do disjuntor: o circuito é o do pai.
+      // Alavanca e marcador são filhos do disjuntor: o circuito é o do pai.
+      if (data.role === "lever" || data.role === "marker") {
         const owner = obj.parent?.userData?.circuitId;
         if (owner) {
           const entry = this.entry(owner);
-          entry.lever = obj;
-          entry.leverRest = obj.position.y;
+          if (data.role === "lever") {
+            entry.lever = obj;
+            entry.leverRest = obj.position.y;
+          } else {
+            entry.marker = obj;
+          }
         }
       }
       if (data.hinge && !this.door) this.door = { object: obj, hinge: data.hinge };
@@ -57,7 +71,7 @@ export class PanelController {
   entry(circuitId) {
     let entry = this.byCircuit.get(circuitId);
     if (!entry) {
-      entry = { object: null, lever: null, leverRest: 0, material: null };
+      entry = { object: null, lever: null, leverRest: 0, marker: null, material: null };
       this.byCircuit.set(circuitId, entry);
     }
     return entry;
@@ -94,22 +108,22 @@ export class PanelController {
     this.door.openRad = THREE.MathUtils.degToRad(hinge.openDeg ?? 90);
   }
 
-  /**
-   * Materiais do glTF são COMPARTILHADOS entre peças que usam o mesmo — duas
-   * lâmpadas do mesmo tipo apontam para a mesma instância. Apagar uma
-   * apagaria a outra, então cada carga ganha sua cópia.
-   */
+  /** Dá instância própria de material a tudo que muda de cor sozinho. */
   prepareMaterials() {
     for (const [id, entry] of this.byCircuit) {
       const element = this.circuit.get(id);
-      if (!element || KIND[element.kind].switchable || !entry.object) continue;
-      entry.object.traverse((child) => {
-        if (!child.isMesh || Array.isArray(child.material)) return;
-        child.material = child.material.clone();
-        entry.material = child.material;
-        entry.baseColor = child.material.color.clone();
-        entry.baseEmissive = child.material.emissive?.clone() ?? new THREE.Color(0, 0, 0);
-      });
+      if (!element) continue;
+
+      // Marcador de disjuntor: recolorido a cada manobra, então precisa de
+      // instância própria tanto quanto uma carga.
+      if (entry.marker) entry.markerMaterial = cloneMaterial(entry.marker);
+
+      if (KIND[element.kind].switchable || !entry.object) continue;
+      const material = cloneMaterial(entry.object);
+      if (!material) continue;
+      entry.material = material;
+      entry.baseColor = material.color.clone();
+      entry.baseEmissive = material.emissive?.clone() ?? new THREE.Color(0, 0, 0);
     }
   }
 
@@ -124,6 +138,14 @@ export class PanelController {
         // não um rótulo na tela.
         if (entry.lever) {
           entry.lever.position.y = entry.leverRest - (element.closed ? 0 : LEVER_DROP);
+        }
+        // O marcador segue `isLive`, não `closed`: um disjuntor fechado a
+        // jusante de um geral desligado NÃO está entregando energia, e mostrá-lo
+        // verde seria a mentira mais perigosa que este painel pode contar.
+        if (entry.markerMaterial) {
+          const live = this.circuit.isLive(id);
+          entry.markerMaterial.color.copy(live ? MARKER_ON : MARKER_OFF);
+          entry.markerMaterial.emissive?.copy(live ? MARKER_ON : MARKER_OFF).multiplyScalar(0.45);
         }
         continue;
       }
@@ -219,6 +241,21 @@ export class PanelController {
 }
 
 const BLACK = new THREE.Color(0, 0, 0);
+
+/**
+ * Materiais do glTF são COMPARTILHADOS entre peças que usam o mesmo. Quem vai
+ * ser recolorido individualmente precisa da própria cópia — sem isto, apagar
+ * uma lâmpada apagaria todas as do mesmo tipo.
+ */
+function cloneMaterial(root) {
+  let cloned = null;
+  root.traverse((child) => {
+    if (!child.isMesh || Array.isArray(child.material) || cloned) return;
+    child.material = child.material.clone();
+    cloned = child.material;
+  });
+  return cloned;
+}
 
 function easeInOutCubic(t) {
   return t < 0.5 ? 4 * t ** 3 : 1 - (-2 * t + 2) ** 3 / 2;

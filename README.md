@@ -13,6 +13,7 @@ app.js                         bootstrap, verificação de suporte, ligação da
 src/ar-experience.js           AR ENGINE: sessão, hit-test, âncora, seleção, loop
 src/placement-guide.js         orientação de varredura + contorno do plano (plane-detection)
 src/explode.js                 vista explodida: separa as peças do equipamento
+src/circuits.js                MODELO ELÉTRICO: energização, manobra, circuitos (dado puro)
 src/occlusion.js               oclusão por profundidade (WebXR Depth Sensing)
 src/hand-occlusion.js          oclusão da mão por silhueta dos landmarks
 src/gestures.js                GESTURE ENGINE (touchscreen)
@@ -268,6 +269,69 @@ Escala/gira/move funcionam igual com o gabinete explodido: esses gestos
 mexem no grupo raiz do equipamento, as peças são filhas com posição local —
 a vista explodida e a manipulação por mão/toque não competem pelo mesmo
 transform.
+
+## Modelo elétrico
+
+[circuits.js](src/circuits.js) é a fonte da verdade sobre o que está
+energizado. **Dado puro: não importa THREE.js nem toca no DOM.** A cena 3D
+apenas assina o resultado (`onChange`) e traduz em cor/emissive — nenhuma
+decisão elétrica mora na cena.
+
+Duas razões concretas para essa separação:
+
+- **testabilidade** — roda em Node (`node tools/test-circuits.mjs`), sem
+  celular e sem sessão AR. É a única parte do sistema verificável fora do
+  aparelho, e é onde errar custa mais caro: mostrar como morto um circuito
+  vivo desacredita a ferramenta inteira. 41 asserções hoje;
+- **portabilidade** — se o projeto um dia virar app nativo (ver "WebXR ou app
+  nativo?"), isto atravessa intacto. O código de WebXR/Three.js, não.
+
+A topologia é um **grafo dirigido**, não uma árvore: cada elemento alimenta
+(`feeds`) outros, e interruptor paralelo (*three-way*) forma ciclo legítimo.
+A propagação é uma busca em largura com conjunto de visitados, então ciclo
+não trava — há teste para isso.
+
+**A distinção que importa para um eletricista**: um disjuntor *desligado*
+continua **energizado no lado da entrada** — ele só não passa adiante. Por
+isso há dois predicados, e não um:
+
+| | significado |
+|---|---|
+| `isEnergized(id)` | recebe tensão (um disjuntor desligado recebe) |
+| `isLive(id)` | de fato entrega/funciona — é o que a cena usa para acender |
+
+Tratar os dois como a mesma coisa mostraria o barramento como morto sempre
+que o disjuntor caísse, que é exatamente o engano perigoso.
+
+`validate()` reporta problemas de montagem (elemento sem alimentação, planta
+sem fonte, referência solta) **sem lançar**: uma planta em construção passa a
+maior parte do tempo incompleta. Ele olha a *topologia*, ignorando o estado
+de manobra — um circuito apenas desligado não é acusado de desconectado.
+
+Já há `toJSON()`/`fromJSON()` versionados, que serão a base do arquivo que o
+usuário vai baixar. Ainda **não estão ligados a nenhuma UI**.
+
+## WebXR ou app nativo?
+
+Pergunta recorrente, respondida aqui para não ser reaberta a cada etapa.
+
+Um app nativo Android usaria o **mesmo ARCore**: a deriva de tracking — o
+fator que decide se "planta de instalação elétrica" é uma promessa honesta —
+seria idêntica. Trocar de plataforma não compra nada nesse ponto.
+
+Ganharia, sim: hand tracking com folga (hoje 8 Hz / 192 px porque a
+inferência do MediaPipe bloqueia a thread de render), FPS, e **âncoras
+persistentes** — o ARCore nativo re-localiza o aparelho na mesma sala numa
+sessão futura, coisa que o WebXR não oferece. Esta última é a única que mexe
+com salvar/carregar: no navegador, o usuário sempre terá de remarcar a origem
+à mão.
+
+Perderia: abrir por link sem instalar, e praticamente todo o código atual
+(Three.js/WebXR não porta).
+
+**Decisão atual: seguir em WebXR.** A vantagem real só importa depois que
+salvar/carregar existir e for usado de verdade — decidir agora seria pagar a
+reescrita antes de saber se ela é necessária.
 
 ## As duas camadas de oclusão
 

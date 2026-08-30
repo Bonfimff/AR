@@ -43,6 +43,10 @@ export function isOcclusionLive(renderer, cpuOcclusion) {
   return Boolean(renderer?.xr?.hasDepthSensing?.() || cpuOcclusion?.active);
 }
 
+// Um texel bem mais perto que os 4 vizinhos por esta margem é tratado como
+// ruído do sensor, não como um objeto real — ver despeckle() abaixo.
+const OUTLIER_METERS = 0.25;
+
 /**
  * Oclusão para o modo cpu-optimized.
  *
@@ -61,6 +65,7 @@ export class CpuDepthOcclusion {
     this.active = false;
     this.texture = null;
     this.meters = null;
+    this.raw = null;
 
     this.uniforms = {
       depthTexture: { value: null },
@@ -159,6 +164,9 @@ export class CpuDepthOcclusion {
     const count = info.width * info.height;
     if (!this.meters || this.meters.length !== count) {
       this.meters = new Float32Array(count);
+      this.raw = new Float32Array(count);
+      this.width = info.width;
+      this.height = info.height;
       this.texture?.dispose();
       this.texture = new THREE.DataTexture(
         this.meters,
@@ -174,13 +182,58 @@ export class CpuDepthOcclusion {
 
     const scale = info.rawValueToMeters;
     if (info.data.byteLength === count * 2) {
-      const raw = new Uint16Array(info.data);
-      for (let i = 0; i < count; i += 1) this.meters[i] = raw[i] * scale;
+      const src = new Uint16Array(info.data);
+      for (let i = 0; i < count; i += 1) this.raw[i] = src[i] * scale;
     } else {
-      const raw = new Float32Array(info.data);
-      for (let i = 0; i < count; i += 1) this.meters[i] = raw[i] * scale;
+      const src = new Float32Array(info.data);
+      for (let i = 0; i < count; i += 1) this.raw[i] = src[i] * scale;
     }
+    this.despeckle();
     this.texture.needsUpdate = true;
+  }
+
+  /**
+   * Remove picos isolados de 1 texel antes de escrever a profundidade.
+   *
+   * O depth-from-motion do ARCore é ruidoso perto de descontinuidades — bordas
+   * de objetos, o encontro com o chão — e ocasionalmente devolve um texel bem
+   * mais PERTO que toda a vizinhança, sem nada ali de verdade. Isso fazia o
+   * equipamento aparecer "furado" na base mesmo sem mão nem objeto na frente
+   * (visto em captura de tela do aparelho: corte serrilhado exatamente onde a
+   * grade de ventilação encontra o chão, com HAND MASK e HAND ambos OFF).
+   *
+   * Um texel isolado mais perto que os 4 vizinhos por mais de OUTLIER_METERS
+   * é rejeitado (tratado como "sem medida", igual a um buraco do sensor) em
+   * vez de usado. Um texel mais LONGE que a vizinhança não é filtrado: na
+   * pior hipótese o equipamento aparece na frente de algo que devia escondê-lo,
+   * o mesmo tipo de falha segura que a filial "meters <= 0" no shader já cobre.
+   * Deliberadamente O(1) por texel (sem alocar, sem ordenar) para não pesar
+   * mais no orçamento de CPU por frame.
+   */
+  despeckle() {
+    const { raw, meters, width, height } = this;
+    for (let y = 0; y < height; y += 1) {
+      const row = y * width;
+      for (let x = 0; x < width; x += 1) {
+        const i = row + x;
+        const value = raw[i];
+        if (value <= 0 || x === 0 || y === 0 || x === width - 1 || y === height - 1) {
+          meters[i] = value;
+          continue;
+        }
+        const left = raw[i - 1];
+        const right = raw[i + 1];
+        const up = raw[i - width];
+        const down = raw[i + width];
+        let neighborMin = Infinity;
+        if (left > 0) neighborMin = Math.min(neighborMin, left);
+        if (right > 0) neighborMin = Math.min(neighborMin, right);
+        if (up > 0) neighborMin = Math.min(neighborMin, up);
+        if (down > 0) neighborMin = Math.min(neighborMin, down);
+        meters[i] =
+          Number.isFinite(neighborMin) && value < neighborMin - OUTLIER_METERS ? 0 : value;
+      }
+    }
   }
 
   dispose() {
@@ -190,6 +243,7 @@ export class CpuDepthOcclusion {
     this.mesh.removeFromParent();
     this.texture = null;
     this.meters = null;
+    this.raw = null;
     this.active = false;
   }
 }

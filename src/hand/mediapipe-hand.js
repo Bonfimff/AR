@@ -27,10 +27,20 @@ const MODEL_URL =
 
 // Resolução da inferência. Baixa de propósito: o gargalo do celular é a leitura
 // GPU->CPU, e o Hand Landmarker funciona bem nessa faixa.
-const INFER_WIDTH = 256;
+//
+// `detectForVideo` é síncrono e roda na mesma thread principal que a sessão
+// WebXR usa para o loop de renderização — não há worker aqui. Em captura de
+// tela do aparelho o FPS caiu para 18-24 com as três camadas (AR + inferência
+// + oclusão por profundidade + máscara da mão) ativas ao mesmo tempo. Como não
+// há como tirar a inferência da thread principal sem um Web Worker (mudança
+// maior, fora do escopo desta rodada), a mitigação possível é reduzir o
+// tamanho e a frequência das inferências — pesa menos a cada vez que trava a
+// thread principal, ao custo de rastreamento levemente menos responsivo, que
+// os filtros (One Euro + interpolação) já existem justamente para cobrir.
+const INFER_WIDTH = 192;
 // Teto de inferências por segundo. A AR continua a 60 fps; só o hand tracking
 // roda mais devagar, e os filtros cobrem o intervalo.
-const INFER_HZ = 12;
+const INFER_HZ = 8;
 
 // A leitura de pixels da GPU vem de baixo para cima (convenção do WebGL),
 // enquanto ImageData é de cima para baixo. Se no aparelho os gestos saírem

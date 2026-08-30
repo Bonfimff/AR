@@ -26,7 +26,16 @@ export const HAND_STATE = {
 const MOVE_THRESHOLD = 0.045;
 const HEIGHT_THRESHOLD = 0.055;
 const ROLL_THRESHOLD = 0.3;
-const RATIO_THRESHOLD = 0.18;
+// A razão polegar-indicador é normalizada pelo tamanho da mão na imagem
+// (distância punho->dedo médio), mas essa normalização também é uma medida
+// 2D — quando a mão gira ou inclina para MOVER, ALTURAR ou GIRAR, as duas
+// distâncias envolvidas mudam de tamanho na tela por escorço (foreshortening),
+// mesmo sem o usuário abrir ou fechar os dedos de verdade. É a fonte mais
+// provável de escala se confundir com os outros três gestos. Limiar mais alto
+// exige uma abertura/fechamento bem mais deliberado antes de travar em
+// escala, o que reduz esse falso-positivo sem eliminar a causa (que exigiria
+// profundidade 3D por landmark, fora do que o MediaPipe 2D entrega aqui).
+const RATIO_THRESHOLD = 0.26;
 
 // Não basta o candidato vencedor cruzar seu limiar: ele precisa vencer o
 // segundo colocado por esta margem. Sem isto, um gesto na diagonal (que anda
@@ -34,7 +43,7 @@ const RATIO_THRESHOLD = 0.18;
 // intenção era "altura", só porque um cruzou o limiar um instante antes do
 // outro. É o mesmo problema, em outras palavras, que fazia escala e
 // deslocamento se confundirem.
-const DOMINANCE_MARGIN = 1.3;
+const DOMINANCE_MARGIN = 1.45;
 
 // Subir a mão pela altura inteira da tela equivale a 1,5 m de altura.
 const HEIGHT_TRAVEL_METERS = 1.5;

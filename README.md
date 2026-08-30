@@ -144,7 +144,7 @@ Gestos (com o objeto colocado, mão diante da câmera):
 - **✋ abrir a mão** — solta; o objeto fica exatamente onde está.
 
 Cada manipulação trava em **um** modo. Não basta o primeiro sinal cruzar seu
-limiar — ele precisa vencer o segundo colocado por 30% de folga
+limiar — ele precisa vencer o segundo colocado por 45% de folga
 (`DOMINANCE_MARGIN`, em [hand-controller.js](src/hand-controller.js) e
 [gestures.js](src/gestures.js)). Sem essa margem, um gesto na diagonal (que
 anda um pouco em X e em Y ao mesmo tempo) podia travar no modo errado só
@@ -153,11 +153,31 @@ existe para toque e para mão. Há também uma carência de 0,25 s após fechar 
 pinça, durante a qual nada é classificado — sem ela, a própria convergência
 dos filtros era lida como gesto de escala.
 
+**Giro não funcionava.** O sinal vinha do vetor punho -> dedo médio, que
+aponta na mesma direção do próprio giro do pulso — girar o pulso em torno do
+antebraço quase não muda esse vetor, então o gesto não produzia sinal quase
+nenhum. Trocado pelo vetor indicador -> mínimo (a linha dos nós dos dedos),
+perpendicular ao antebraço: gira visivelmente na imagem quando o pulso gira,
+como girar uma maçaneta. Confirmado com uma simulação numérica (um giro de
+90° do pulso produzia 0,0 rad no sinal antigo e 1,57 rad — os 90° esperados
+— no novo).
+
+**Escala se confundindo com os outros gestos.** A razão polegar-indicador é
+normalizada pelo tamanho da mão na imagem (distância punho->dedo médio) —
+mas as duas são medidas 2D, e escorço (foreshortening) as altera quando a
+mão gira ou inclina para MOVER, ALTURAR ou GIRAR, mesmo sem o usuário abrir
+ou fechar os dedos de verdade. `RATIO_THRESHOLD` subiu de 0,18 para 0,26:
+exige uma abertura/fechamento bem mais deliberado antes de travar em escala,
+o que reduz o falso-positivo sem eliminar a causa — isso exigiria
+profundidade 3D por landmark, que o MediaPipe 2D usado aqui não entrega.
+
 Qual modo está ativo aparece na tela — um rótulo discreto (`↔ Movendo`,
 `⤢ Escala`, `⟳ Girando`, `↕ Altura`, `🤏 Selecionado`) que some sozinho quando
-o gesto termina. Na primeira vez que a mão é detectada, uma legenda explica o
-vocabulário completo; ela só aparece uma vez por aparelho (fica marcada no
-`localStorage`). Ambos vivem em [gesture-hud.js](src/gesture-hud.js).
+o gesto termina. Na primeira vez que a mão é detectada, uma legenda anima
+cada ícone do jeito do próprio gesto (desliza, sobe/desce, gira, pulsa) e
+explica o vocabulário completo; ela só aparece uma vez por aparelho (fica
+marcada no `localStorage`). Ambos vivem em [gesture-hud.js](src/gesture-hud.js)
+e nas classes `g-*` de [style.css](style.css).
 
 O touchscreen tem prioridade: enquanto há um dedo na tela, o controle por mão
 fica suspenso, para que os dois nunca escrevam no mesmo transform.
@@ -182,7 +202,22 @@ S20+ e no S20 Ultra).
 medição real. A distância vem do tamanho da mão na imagem combinado com a
 projeção da câmera, então ela acompanha aproximar e afastar. Compõe com a
 profundidade real usando `LessDepth`: só vence onde estiver de fato mais perto.
+A silhueta é um hexágono por junta mais um retângulo por osso, não só
+retângulos — sem isso a borda ficava visivelmente poligonal de perto.
 Desligue com `?handmask=0` para comparar as duas.
+
+**Ruído perto de bordas.** Captura de tela do aparelho mostrou o equipamento
+"furado" na base — recorte serrilhado — sem mão nem objeto na frente, com
+`DEPTH: ACTIVE CPU` isolado. O depth-from-motion ocasionalmente devolve um
+texel isolado bem mais perto que toda a vizinhança, e isso bastava para
+recortar o objeto e até quebrar o anel de seleção em arcos soltos (ele também
+sofria o mesmo corte, por estar no chão bem onde o ruído aparecia). Duas
+correções: `despeckle()` em [occlusion.js](src/occlusion.js) rejeita um texel
+isolado que seja bem mais perto que os 4 vizinhos antes de escrevê-lo como
+profundidade — tratado como "sem medida", igual a um buraco do sensor; e o
+anel de seleção em [equipment.js](src/equipment.js) ganhou `depthTest: false`,
+o mesmo tratamento que o retículo já tinha, por ser guia de UI e não algo
+físico.
 
 ## Painel de diagnóstico
 
@@ -219,8 +254,9 @@ apresentação.
 - **Qualidade do mapa de profundidade**: é de baixa resolução e ruidoso. Bordas de mão
   e cabelo ficam imprecisas, e superfícies muito próximas (< ~30 cm) ou muito distantes
   saem do alcance útil.
-- **Só o modo `gpu-optimized`**: é o único que o renderer usa para escrever `gl_FragDepth`.
-  Pedir `cpu-optimized` habilitaria a feature sem produzir oclusão nenhuma.
+- **`gpu-optimized` é o único que o Three.js cobre nativamente**: para `cpu-optimized`
+  o passe de `gl_FragDepth` é feito à mão em `CpuDepthOcclusion`
+  ([occlusion.js](src/occlusion.js)) — é o caminho que o Galaxy S20 FE de fato concede.
 - **Sem plane detection nem light estimation** nesta versão: o objeto não recebe a
   iluminação real do ambiente.
 - **Hand Input nativo não existe em celular**: o ARCore não expõe esqueleto de mão
@@ -230,7 +266,12 @@ apresentação.
 - **Oclusão e profundidade por pixel são excludentes**: `depthUsage` é único por
   sessão. A oclusão exige `gpu-optimized`; ler profundidade no CPU exigiria
   `cpu-optimized`. Escolhemos a oclusão, e a posição 3D da mão vem de raycast.
-- **MediaPipe custa banda e GPU**: ~7 MB de modelo mais o WASM, baixados do CDN na
-  primeira sessão. A inferência roda a 12 Hz e em 256 px de largura de propósito.
+- **MediaPipe custa banda e thread principal**: ~7 MB de modelo mais o WASM, baixados
+  do CDN na primeira sessão. `detectForVideo` é síncrono e roda na mesma thread do loop
+  WebXR — sem Web Worker, cada inferência trava um pouco o quadro seguinte. Captura de
+  tela do aparelho mostrou 18–24 fps com AR + inferência + as duas oclusões ativas ao
+  mesmo tempo. Reduzido para 8 Hz e 192 px de largura (eram 12 Hz / 256 px) para pesar
+  menos a cada inferência; não verificado no aparelho se isso é suficiente — um Web
+  Worker seria a correção definitiva, fora do escopo desta rodada.
 - **Redimensionamento**: durante a sessão a projeção e o viewport são controlados pelo
   WebXR; o handler de resize só atua fora dela.

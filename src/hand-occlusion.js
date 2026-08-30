@@ -47,8 +47,16 @@ const BONES = [
 ];
 const PALM = [0, L.indexMcp, L.middleMcp, L.ringMcp, L.pinkyMcp];
 
-// 2 triângulos por osso + um leque de PALM.length triângulos para a palma.
-const MAX_VERTICES = BONES.length * 6 + PALM.length * 3;
+// Onde dois ossos se encontram a direção muda, e um retângulo por osso deixa
+// uma aresta viva na junta — visível de perto como um contorno poligonal em
+// vez de um dedo. Um hexágono em cada junta arredonda essa transição; barato
+// o bastante (6 triângulos) para cobrir todas de uma vez.
+const CAP_SEGMENTS = 6;
+const JOINTS = [...new Set(BONES.flat())];
+
+// 2 triângulos por osso + um leque de PALM.length triângulos para a palma +
+// um hexágono por junta.
+const MAX_VERTICES = BONES.length * 6 + PALM.length * 3 + JOINTS.length * CAP_SEGMENTS * 3;
 
 export class HandOcclusion {
   constructor() {
@@ -151,7 +159,7 @@ export class HandOcclusion {
     this.active = true;
   }
 
-  /** Monta a silhueta: um quad por osso mais o leque da palma. */
+  /** Monta a silhueta: um quad por osso, um hexágono por junta, e o leque da palma. */
   build(halfWidth, aspect) {
     const positions = this.positions;
     let n = 0;
@@ -184,6 +192,23 @@ export class HandOcclusion {
 
       push(p1[0], p1[1]); push(p2[0], p2[1]); push(p3[0], p3[1]);
       push(p1[0], p1[1]); push(p3[0], p3[1]); push(p4[0], p4[1]);
+    }
+
+    // Um hexágono do raio dos ossos em cada junta, arredondando a transição
+    // entre segmentos consecutivos.
+    for (const j of JOINTS) {
+      const jx = ndcX(j);
+      const jy = ndcY(j);
+      const ax = jx * aspect; // mesmo espaço corrigido por aspecto dos ossos
+      for (let s = 0; s < CAP_SEGMENTS; s += 1) {
+        const a0 = (s / CAP_SEGMENTS) * Math.PI * 2;
+        const a1 = ((s + 1) / CAP_SEGMENTS) * Math.PI * 2;
+        const x0 = (ax + Math.cos(a0) * halfWidth) / aspect;
+        const y0 = jy + Math.sin(a0) * halfWidth;
+        const x1 = (ax + Math.cos(a1) * halfWidth) / aspect;
+        const y1 = jy + Math.sin(a1) * halfWidth;
+        push(jx, jy); push(x0, y0); push(x1, y1);
+      }
     }
 
     // Palma: leque a partir do centroide, levemente dilatado.

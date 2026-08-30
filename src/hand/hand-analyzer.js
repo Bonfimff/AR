@@ -78,7 +78,9 @@ export class HandAnalyzer {
     const middleMcp = points[LANDMARK.middleMcp];
     const thumbTip = points[LANDMARK.thumbTip];
     const indexTip = points[LANDMARK.indexTip];
-    if (!wrist || !middleMcp || !thumbTip || !indexTip) return null;
+    const indexMcp = points[LANDMARK.indexMcp];
+    const pinkyMcp = points[LANDMARK.pinkyMcp];
+    if (!wrist || !middleMcp || !thumbTip || !indexTip || !indexMcp || !pinkyMcp) return null;
 
     // Tamanho da mão na imagem: normaliza tudo o mais e absorve a distância
     // do usuário até a câmera.
@@ -93,10 +95,14 @@ export class HandAnalyzer {
     );
     const palm = this.palmPoint.filter(middleMcp, time, {});
 
-    // Rotação vem do eixo punho -> nó do dedo médio, e NÃO do vetor
-    // polegar->indicador: com a pinça fechada esse vetor é quase nulo e seu
-    // ângulo fica puro ruído.
-    const rawRoll = Math.atan2(middleMcp.y - wrist.y, middleMcp.x - wrist.x);
+    // Rotação vem do eixo indicador -> mínimo (a linha dos nós dos dedos), e
+    // NÃO do vetor polegar->indicador (quase nulo com a pinça fechada, ângulo
+    // vira ruído) nem do eixo punho->dedo médio (usado numa versão anterior):
+    // girar o pulso em torno do próprio antebraço quase não muda ESSE vetor —
+    // ele aponta na mesma direção do giro, então gira muito pouco em volta de
+    // si mesmo. A linha indicador->mínimo é perpendicular ao antebraço, então
+    // varre visivelmente na imagem quando o pulso gira (como girar uma maçaneta).
+    const rawRoll = Math.atan2(pinkyMcp.y - indexMcp.y, pinkyMcp.x - indexMcp.x);
     if (this.lastRawRoll !== null) {
       this.unwrappedRoll += shortestAngle(rawRoll - this.lastRawRoll);
     }

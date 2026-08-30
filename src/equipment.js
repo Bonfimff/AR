@@ -66,12 +66,18 @@ export function createSelectionIndicator(object) {
       color: 0x00e0a4,
       transparent: true,
       opacity: 0.85,
+      // Mesmo tratamento do retículo: é uma guia de UI, não algo físico, então
+      // não deve ficar recortado pelo mapa de profundidade. Sem isto, ruído do
+      // depth-from-motion perto do chão (ver despeckle() em occlusion.js)
+      // quebrava o anel em arcos soltos em vez de um círculo contínuo.
+      depthTest: false,
       depthWrite: false,
       side: THREE.DoubleSide,
     })
   );
   ring.name = "SelectionIndicator";
   ring.position.y = 0.005; // evita z-fighting com o piso
+  ring.renderOrder = 5; // depois das passadas de oclusão (renderOrder negativo)
   ring.visible = false;
   ring.raycast = () => {}; // não deve capturar o toque de seleção
   object.add(ring);

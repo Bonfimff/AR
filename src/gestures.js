@@ -31,6 +31,11 @@ const SCALE_THRESHOLD = 0.1; // variação relativa da distância entre os dedos
 const ROTATE_THRESHOLD = 0.18; // radianos (~10°)
 const HEIGHT_THRESHOLD_PX = 26;
 
+// O vencedor precisa superar o segundo colocado por esta margem, não só
+// cruzar o próprio limiar primeiro — evita travar em altura por causa de um
+// pan levemente diagonal, ou em escala por causa de um giro impreciso.
+const DOMINANCE_MARGIN = 1.3;
+
 // O touchscreen entrega um pointermove POR DEDO. Enquanto só um dedo se moveu,
 // o par parece estar girando, e classificar aí travaria o modo errado. Por isso
 // só classificamos quando os dois dedos já andaram — ou quando um andou muito
@@ -50,11 +55,12 @@ const _hitPoint = new THREE.Vector3();
 const _ndc = new THREE.Vector2();
 
 export class GestureController {
-  constructor({ element, getCamera, onTap, onChange }) {
+  constructor({ element, getCamera, onTap, onChange, onModeChange }) {
     this.element = element;
     this.getCamera = getCamera;
     this.onTap = onTap;
     this.onChange = onChange;
+    this.onModeChange = onModeChange;
 
     this.target = null;
     this.pointers = new Map();
@@ -170,8 +176,12 @@ export class GestureController {
     if (this.pointers.size === 0) {
       this.mode = null;
       this.subMode = null;
+      this.onModeChange?.(null);
     } else if (this.pointers.size === 1 && this.target) {
-      // Voltou a um dedo: recomeça o arrasto sem salto.
+      // Voltou a um dedo: recomeça o arrasto sem salto. O rótulo do modo
+      // anterior (escala/giro/altura) some até o arrasto ser confirmado de
+      // novo, para não ficar exibindo um gesto que já não está mais ativo.
+      this.onModeChange?.(null);
       const [remaining] = this.pointers.values();
       this.beginDrag(remaining.x, remaining.y);
     }
@@ -182,6 +192,7 @@ export class GestureController {
   beginDrag(clientX, clientY) {
     this.mode = "drag";
     this.subMode = null;
+    this._dragAnnounced = false; // só avisa "movendo" quando o arrasto for real, não num toque
     this.target.getWorldPosition(_worldPosition);
     this.plane.setFromNormalAndCoplanarPoint(THREE.Object3D.DEFAULT_UP, _worldPosition);
     const hit = this.rayToPlane(clientX, clientY);
@@ -192,6 +203,11 @@ export class GestureController {
   updateDrag(clientX, clientY) {
     const hit = this.rayToPlane(clientX, clientY);
     if (!hit) return;
+
+    if (!this._dragAnnounced) {
+      this._dragAnnounced = true;
+      this.onModeChange?.("move");
+    }
 
     hit.add(this.dragOffset);
     const local = this.target.parent.worldToLocal(hit);
@@ -213,6 +229,7 @@ export class GestureController {
   beginTwoFinger() {
     this.mode = "two-finger";
     this.subMode = null;
+    this.onModeChange?.(null); // some o rótulo de "mover" até o segundo modo ser decidido
     const [[idA, a], [idB, b]] = this.pointers.entries();
     this.start = {
       idA,
@@ -293,10 +310,15 @@ export class GestureController {
         ? Math.abs(panY) / HEIGHT_THRESHOLD_PX
         : 0;
 
-    const best = Math.max(scaleProgress, rotateProgress, heightProgress);
-    if (best < 1) return false;
+    const candidates = [
+      { mode: "scale", progress: scaleProgress },
+      { mode: "rotate", progress: rotateProgress },
+      { mode: "height", progress: heightProgress },
+    ].sort((a, b) => b.progress - a.progress);
+    const [best, runnerUp] = candidates;
+    if (best.progress < 1 || best.progress < runnerUp.progress * DOMINANCE_MARGIN) return false;
 
-    this.subMode = best === scaleProgress ? "scale" : best === rotateProgress ? "rotate" : "height";
+    this.subMode = best.mode;
 
     // Rebaseia no ponto atual para o modo não começar com um salto.
     this.start.a = { ...a };
@@ -304,6 +326,7 @@ export class GestureController {
     this.start.distance = currentDistance;
     this.start.angle = currentAngle;
     this.start.centerY = centerY;
+    this.onModeChange?.(this.subMode);
     return true;
   }
 

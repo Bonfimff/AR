@@ -35,6 +35,8 @@ export class ARExperience {
     onPlaced,
     onDepthStatus,
     onDiagnostics,
+    onGestureMode,
+    onHandDetected,
     onEnd,
   }) {
     this.model = getModel(modelId);
@@ -44,7 +46,10 @@ export class ARExperience {
     this.onPlaced = onPlaced;
     this.onDepthStatus = onDepthStatus;
     this.onDiagnostics = onDiagnostics;
+    this.onGestureMode = onGestureMode;
+    this.onHandDetected = onHandDetected;
     this.onEnd = onEnd;
+    this.handEverDetected = false;
 
     this.session = null;
     this.equipment = null;
@@ -187,6 +192,7 @@ export class ARExperience {
       getCamera: () => this.getXRCamera(),
       getRect: () => this.gestureLayer.getBoundingClientRect(),
       onStateChange: (state) => this.onHandStateChange(state),
+      onModeChange: (mode) => this.onGestureMode?.(mode),
     });
     this.handController.setTarget(this.equipment ?? null);
   }
@@ -196,6 +202,10 @@ export class ARExperience {
    * enquanto a mão segura o objeto, o controlador de toque fica sem alvo.
    */
   onHandStateChange(state) {
+    if (!this.handEverDetected && state !== HAND_STATE.IDLE) {
+      this.handEverDetected = true;
+      this.onHandDetected?.();
+    }
     if (state === HAND_STATE.OBJECT_SELECTED) {
       this.setSelected(true);
       this.gestures?.setTarget(null);
@@ -268,6 +278,7 @@ export class ARExperience {
         getCamera: () => this.getXRCamera(),
         onTap: (x, y) => this.handleTap(x, y),
         onChange: () => this.markInteracted(),
+        onModeChange: (mode) => this.onGestureMode?.(mode),
       });
     } else {
       // Sem dom-overlay não há eventos DOM: usa o 'select' do próprio WebXR.

@@ -1,6 +1,7 @@
 import { ARExperience } from "./src/ar-experience.js";
 import { DEFAULT_MODEL_ID } from "./src/models.js";
 import { Diagnostics } from "./src/diagnostics.js";
+import { GestureHud } from "./src/gesture-hud.js";
 
 const ui = {
   startScreen: document.getElementById("start-screen"),
@@ -15,11 +16,15 @@ const ui = {
   depthBtn: document.getElementById("depth-btn"),
   repositionBtn: document.getElementById("reposition-btn"),
   exitBtn: document.getElementById("exit-ar-btn"),
+  gestureBadge: document.getElementById("gesture-badge"),
+  gestureLegend: document.getElementById("gesture-legend"),
+  gestureLegendClose: document.getElementById("gesture-legend-close"),
 };
 
 let experience = null;
 let depthBadgeTimer = null;
 let diagnostics = null;
+let gestureHud = null;
 
 function showMessage(text) {
   ui.message.hidden = !text;
@@ -76,6 +81,8 @@ async function startAR() {
     onStatus: setStatus,
     onDepthStatus: showDepthStatus,
     onDiagnostics: (data, now) => diagnostics.update(data, now),
+    onGestureMode: (mode) => gestureHud.showMode(mode),
+    onHandDetected: () => gestureHud.maybeShowHandLegend(),
     onPlaced: () => {
       ui.repositionBtn.hidden = false;
     },
@@ -87,6 +94,8 @@ async function startAR() {
       ui.diagBtn.classList.remove("is-on");
       ui.depthBtn.hidden = true;
       ui.depthBtn.classList.remove("is-on");
+      gestureHud.showMode(null);
+      ui.gestureLegend.hidden = true;
       ui.hud.hidden = true;
       ui.repositionBtn.hidden = true;
       ui.startScreen.hidden = false;
@@ -121,6 +130,12 @@ async function init() {
   }
 
   diagnostics = new Diagnostics(ui.diagPanel);
+  gestureHud = new GestureHud({
+    badgeEl: ui.gestureBadge,
+    legendEl: ui.gestureLegend,
+    legendCloseEl: ui.gestureLegendClose,
+  });
+
   ui.diagBtn.addEventListener("click", () => {
     ui.diagBtn.classList.toggle("is-on", diagnostics.toggle());
   });

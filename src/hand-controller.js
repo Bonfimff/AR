@@ -28,6 +28,14 @@ const HEIGHT_THRESHOLD = 0.055;
 const ROLL_THRESHOLD = 0.3;
 const RATIO_THRESHOLD = 0.18;
 
+// Não basta o candidato vencedor cruzar seu limiar: ele precisa vencer o
+// segundo colocado por esta margem. Sem isto, um gesto na diagonal (que anda
+// um pouco em X e em Y ao mesmo tempo) podia travar em "mover" quando a
+// intenção era "altura", só porque um cruzou o limiar um instante antes do
+// outro. É o mesmo problema, em outras palavras, que fazia escala e
+// deslocamento se confundirem.
+const DOMINANCE_MARGIN = 1.3;
+
 // Subir a mão pela altura inteira da tela equivale a 1,5 m de altura.
 const HEIGHT_TRAVEL_METERS = 1.5;
 const SMOOTHING = 12;
@@ -38,10 +46,11 @@ const SMOOTHING = 12;
 const GRAB_SETTLE_SECONDS = 0.25;
 
 export class HandController {
-  constructor({ getCamera, getRect, onStateChange }) {
+  constructor({ getCamera, getRect, onStateChange, onModeChange }) {
     this.getCamera = getCamera;
     this.getRect = getRect;
     this.onStateChange = onStateChange;
+    this.onModeChange = onModeChange;
 
     this.analyzer = new HandAnalyzer();
     this.ray = new ScreenRay();
@@ -145,6 +154,7 @@ export class HandController {
     };
     this.mode = null;
     this.setState(HAND_STATE.OBJECT_SELECTED);
+    this.onModeChange?.("selected");
   }
 
   manipulate(sample, time) {
@@ -166,23 +176,26 @@ export class HandController {
       const ratioProgress =
         Math.abs(sample.pinchRatio / this.grab.ratio - 1) / RATIO_THRESHOLD;
 
-      const best = Math.max(moveProgress, heightProgress, rollProgress, ratioProgress);
-      if (best < 1) return; // gesto ainda ambíguo: não mexe em nada
+      const candidates = [
+        { mode: "move", progress: moveProgress },
+        { mode: "height", progress: heightProgress },
+        { mode: "rotate", progress: rollProgress },
+        { mode: "scale", progress: ratioProgress },
+      ].sort((a, b) => b.progress - a.progress);
+      const [best, runnerUp] = candidates;
 
-      this.mode =
-        best === ratioProgress
-          ? "scale"
-          : best === rollProgress
-            ? "rotate"
-            : best === heightProgress
-              ? "height"
-              : "move";
+      // Precisa ter cruzado o limiar E vencer o segundo colocado com folga —
+      // as duas condições, não só a primeira.
+      if (best.progress < 1 || best.progress < runnerUp.progress * DOMINANCE_MARGIN) return;
+
+      this.mode = best.mode;
 
       // Rebaseia para o modo não começar com um salto.
       this.grab.pinch = { ...sample.pinch };
       this.grab.ratio = sample.pinchRatio;
       this.grab.roll = sample.roll;
       this.setState(HAND_STATE.MANIPULATING);
+      this.onModeChange?.(this.mode);
       return;
     }
 
@@ -227,6 +240,7 @@ export class HandController {
     this.mode = null;
     this.syncDesired(); // congela o transform atual como alvo: nada mais se move
     this.setState(HAND_STATE.RELEASED);
+    this.onModeChange?.(null);
   }
 
   applyDamping(delta) {

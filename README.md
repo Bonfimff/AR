@@ -117,6 +117,7 @@ Abra no celular a URL `https://…` gerada.
    - **2 dedos girando**: rotação no eixo vertical;
    - **2 dedos deslizando para cima/baixo**: altura.
    Cada gesto de dois dedos trava em UM modo por vez; solte os dedos para trocar.
+   Um rótulo discreto no rodapé confirma qual modo está ativo.
 9. Toque fora do objeto para desselecionar. **Reposicionar** recoloca. **Sair da AR** encerra.
 
 Para testar a oclusão: com o objeto colocado, passe a mão entre o celular e o
@@ -142,11 +143,21 @@ Gestos (com o objeto colocado, mão diante da câmera):
 - **subir/descer a mão** — altura;
 - **✋ abrir a mão** — solta; o objeto fica exatamente onde está.
 
-Cada manipulação trava em **um** modo, escolhido pelo primeiro sinal que cruza
-seu limiar. É o que impede escala e rotação involuntárias quando a mão faz
-várias coisas ao mesmo tempo. Há uma carência de 0,25 s após fechar a pinça,
-durante a qual nada é classificado — sem ela, a própria convergência dos
-filtros era lida como gesto de escala.
+Cada manipulação trava em **um** modo. Não basta o primeiro sinal cruzar seu
+limiar — ele precisa vencer o segundo colocado por 30% de folga
+(`DOMINANCE_MARGIN`, em [hand-controller.js](src/hand-controller.js) e
+[gestures.js](src/gestures.js)). Sem essa margem, um gesto na diagonal (que
+anda um pouco em X e em Y ao mesmo tempo) podia travar no modo errado só
+porque um eixo cruzou o limiar um instante antes do outro — a mesma folga
+existe para toque e para mão. Há também uma carência de 0,25 s após fechar a
+pinça, durante a qual nada é classificado — sem ela, a própria convergência
+dos filtros era lida como gesto de escala.
+
+Qual modo está ativo aparece na tela — um rótulo discreto (`↔ Movendo`,
+`⤢ Escala`, `⟳ Girando`, `↕ Altura`, `🤏 Selecionado`) que some sozinho quando
+o gesto termina. Na primeira vez que a mão é detectada, uma legenda explica o
+vocabulário completo; ela só aparece uma vez por aparelho (fica marcada no
+`localStorage`). Ambos vivem em [gesture-hud.js](src/gesture-hud.js).
 
 O touchscreen tem prioridade: enquanto há um dedo na tela, o controle por mão
 fica suspenso, para que os dois nunca escrevam no mesmo transform.

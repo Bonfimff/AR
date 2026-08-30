@@ -217,3 +217,88 @@ canvas {
   background: rgba(0, 224, 164, 0.2);
   border-color: rgba(0, 224, 164, 0.55);
 }
+
+/* Indicador discreto do gesto ativo (mão ou toque) */
+.gesture-badge {
+  position: absolute;
+  bottom: calc(env(safe-area-inset-bottom, 16px) + 76px);
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 6px 14px;
+  border-radius: 999px;
+  background: rgba(11, 12, 15, 0.6);
+  backdrop-filter: blur(6px);
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  color: #f2f2f2;
+  font-size: 0.8rem;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.gesture-badge[hidden] {
+  display: none;
+}
+
+/* Legenda única de gestos da mão, mostrada na primeira detecção */
+.gesture-legend {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: min(280px, 80vw);
+  padding: 18px;
+  border-radius: 16px;
+  background: rgba(11, 12, 15, 0.9);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  backdrop-filter: blur(10px);
+  pointer-events: auto;
+  text-align: left;
+}
+
+.gesture-legend[hidden] {
+  display: none;
+}
+
+.gesture-legend-title {
+  font-size: 0.9rem;
+  font-weight: 600;
+  margin-bottom: 12px;
+}
+
+.gesture-legend ul {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  margin-bottom: 16px;
+}
+
+.gesture-legend li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 0.78rem;
+  color: #c9cbd2;
+  line-height: 1.3;
+}
+
+.gesture-legend li span {
+  flex: 0 0 auto;
+  width: 38px;
+  text-align: center;
+  font-size: 0.95rem;
+}
+
+.btn-tiny {
+  appearance: none;
+  border: 1px solid rgba(0, 224, 164, 0.55);
+  background: rgba(0, 224, 164, 0.2);
+  color: #f2f2f2;
+  font-size: 0.8rem;
+  font-weight: 600;
+  padding: 8px 16px;
+  border-radius: 999px;
+  cursor: pointer;
+  width: 100%;
+}

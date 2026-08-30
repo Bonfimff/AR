@@ -358,6 +358,75 @@ canvas {
   }
 }
 
+/* Controle de escala na tela: a escala saiu dos gestos de mão porque o sinal
+   dela (abertura dos dedos) é inseparável do escorço dos outros gestos. Aqui
+   ela é exata e reversível. */
+.scale-control {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+  padding: 8px 16px;
+  border-radius: 999px;
+  background: rgba(11, 12, 15, 0.6);
+  backdrop-filter: blur(6px);
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  pointer-events: auto;
+  font-size: 0.78rem;
+  color: #c9cbd2;
+}
+
+.scale-control[hidden] {
+  display: none;
+}
+
+.scale-control input[type="range"] {
+  appearance: none;
+  width: min(190px, 42vw);
+  height: 22px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.scale-control input[type="range"]::-webkit-slider-runnable-track {
+  height: 3px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.3);
+}
+
+/* Alvo de toque generoso (28px): num celular o polegar não acerta um pino
+   de 12px enquanto a outra mão segura o aparelho. */
+.scale-control input[type="range"]::-webkit-slider-thumb {
+  appearance: none;
+  width: 28px;
+  height: 28px;
+  margin-top: -12.5px;
+  border-radius: 999px;
+  background: #00e0a4;
+  border: 2px solid rgba(11, 12, 15, 0.8);
+}
+
+.scale-control input[type="range"]::-moz-range-track {
+  height: 3px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.3);
+}
+
+.scale-control input[type="range"]::-moz-range-thumb {
+  width: 24px;
+  height: 24px;
+  border-radius: 999px;
+  background: #00e0a4;
+  border: 2px solid rgba(11, 12, 15, 0.8);
+}
+
+.scale-control output {
+  min-width: 46px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: #f2f2f2;
+}
+
 .btn-tiny {
   appearance: none;
   border: 1px solid rgba(0, 224, 164, 0.55);

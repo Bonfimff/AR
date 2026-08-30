@@ -40,22 +40,13 @@ export const FINGERS = {
 // os torna adaptativos: valem igual com a mão perto ou longe da câmera.
 const PINCH_ON = 0.42;
 const PINCH_OFF = 0.62;
-// Enquanto o usuário escala, o gesto precisa abrir mais para soltar — senão a
-// própria abertura que gera a escala encerraria a manipulação. Mas tem de ficar
-// ABAIXO da razão de uma mão totalmente aberta (~1,2), ou abrir a mão nunca
-// solta o objeto.
-const PINCH_OFF_WHILE_SCALING = 1.0;
 
 export class HandAnalyzer {
   constructor() {
     this.pinchPoint = new OneEuroVec2({ minCutoff: 1.4, beta: 0.03 });
     this.palmPoint = new OneEuroVec2({ minCutoff: 1.0, beta: 0.02 });
-    // beta baixo (0.01) segurava bem o ruído de escorço que confundia escala
-    // com os outros gestos — mas também suavizava demais um aperto rápido e
-    // pequeno dos dedos (o gesto de REDUZIR a escala), que se perdia antes de
-    // acumular no limiar. Subido um pouco: o RATIO_THRESHOLD mais alto (ver
-    // hand-controller.js) já assume boa parte do trabalho de rejeitar ruído,
-    // então o filtro pode soltar mais a mão para o movimento rápido de verdade.
+    // A razão só alimenta o portão de pinça (aberta/fechada) — a escala saiu
+    // dos gestos de mão e virou controle de tela, ver hand-controller.js.
     this.ratio = new OneEuroFilter({ minCutoff: 1.6, beta: 0.04 });
     // beta mais alto que os outros filtros: um giro de pulso deliberado é
     // rápido, e o beta baixo herdado do sinal antigo (punho->dedo médio, que
@@ -82,9 +73,8 @@ export class HandAnalyzer {
   /**
    * @param {Array<{x:number,y:number}>} points 21 landmarks em [0..1]
    * @param {number} time segundos
-   * @param {boolean} scaling se o controlador está no modo escala
    */
-  analyze(points, time, scaling = false) {
+  analyze(points, time) {
     const wrist = points[LANDMARK.wrist];
     const middleMcp = points[LANDMARK.middleMcp];
     const thumbTip = points[LANDMARK.thumbTip];
@@ -120,7 +110,7 @@ export class HandAnalyzer {
     this.lastRawRoll = rawRoll;
     const roll = this.rollFilter.filter(this.unwrappedRoll, time);
 
-    const pinching = this.gate.update(ratio, scaling ? PINCH_OFF_WHILE_SCALING : PINCH_OFF);
+    const pinching = this.gate.update(ratio, PINCH_OFF);
 
     return {
       present: true,

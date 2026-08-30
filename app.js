@@ -20,7 +20,27 @@ const ui = {
   gestureBadge: document.getElementById("gesture-badge"),
   gestureLegend: document.getElementById("gesture-legend"),
   gestureLegendClose: document.getElementById("gesture-legend-close"),
+  scaleControl: document.getElementById("scale-control"),
+  scaleRange: document.getElementById("scale-range"),
+  scaleValue: document.getElementById("scale-value"),
 };
+
+// A barra de escala é LOGARÍTMICA: 0.2x .. 5x com 1x exatamente no meio. Numa
+// barra linear, todo o intervalo de reduzir (0.2..1) ficaria espremido em 16%
+// do curso e o de aumentar ocuparia o resto — reduzir seria impossível de
+// ajustar com o polegar. Em log, reduzir pela metade e dobrar andam o mesmo
+// tanto, que é como a escala é percebida.
+const SCALE_MIN = 0.2;
+const SCALE_MAX = 5;
+const SLIDER_MAX = 1000;
+const sliderToScale = (v) =>
+  SCALE_MIN * Math.pow(SCALE_MAX / SCALE_MIN, v / SLIDER_MAX);
+const scaleToSlider = (s) =>
+  Math.round((Math.log(s / SCALE_MIN) / Math.log(SCALE_MAX / SCALE_MIN)) * SLIDER_MAX);
+
+function showScale(scale) {
+  ui.scaleValue.textContent = `${Math.round(scale * 100)}%`;
+}
 
 let experience = null;
 let depthBadgeTimer = null;
@@ -84,8 +104,14 @@ async function startAR() {
     onDiagnostics: (data, now) => diagnostics.update(data, now),
     onGestureMode: (mode) => gestureHud.showMode(mode),
     onHandDetected: () => gestureHud.maybeShowHandLegend(),
+    onScale: (scale) => {
+      // Vem do gesto de pinça de dois dedos; o slider só reflete, não reage.
+      ui.scaleRange.value = String(scaleToSlider(scale));
+      showScale(scale);
+    },
     onPlaced: (explodable) => {
       ui.repositionBtn.hidden = false;
+      ui.scaleControl.hidden = false;
       ui.explodeBtn.hidden = !explodable;
       ui.explodeBtn.textContent = "Vista explodida";
       ui.explodeBtn.classList.remove("is-on");
@@ -104,6 +130,7 @@ async function startAR() {
       ui.repositionBtn.hidden = true;
       ui.explodeBtn.hidden = true;
       ui.explodeBtn.classList.remove("is-on");
+      ui.scaleControl.hidden = true;
       ui.startScreen.hidden = false;
       ui.startBtn.disabled = false;
       setStatus("");
@@ -114,6 +141,9 @@ async function startAR() {
   ui.hud.hidden = false;
   ui.repositionBtn.hidden = true;
   ui.explodeBtn.hidden = true;
+  ui.scaleControl.hidden = true;
+  ui.scaleRange.value = String(scaleToSlider(1));
+  showScale(1);
 
   try {
     await experience.start();
@@ -157,7 +187,14 @@ async function init() {
     ui.repositionBtn.hidden = true;
     ui.explodeBtn.hidden = true;
     ui.explodeBtn.classList.remove("is-on");
+    ui.scaleControl.hidden = true;
     experience?.reposition();
+  });
+
+  ui.scaleRange.addEventListener("input", () => {
+    const scale = sliderToScale(Number(ui.scaleRange.value));
+    showScale(scale);
+    experience?.setScale(scale);
   });
 
   ui.explodeBtn.addEventListener("click", () => {

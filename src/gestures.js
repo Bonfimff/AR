@@ -99,6 +99,12 @@ export class GestureController {
     }
   }
 
+  /** Escala vinda do controle na tela (ver ARExperience.setScale). */
+  setScale(scale) {
+    this.desired.scale = scale;
+    if (this.start) this.start.scale = scale;
+  }
+
   dispose() {
     this.element.removeEventListener("pointerdown", this._down);
     this.element.removeEventListener("pointermove", this._move);

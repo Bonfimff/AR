@@ -32,16 +32,21 @@ const HEIGHT_THRESHOLD = 0.055;
 // pinçando. Baixado para ~11°, que a margem de dominância (abaixo) já
 // protege de confundir com os outros gestos.
 const ROLL_THRESHOLD = 0.2;
-// A razão polegar-indicador é normalizada pelo tamanho da mão na imagem
-// (distância punho->dedo médio), mas essa normalização também é uma medida
-// 2D — quando a mão gira ou inclina para MOVER, ALTURAR ou GIRAR, as duas
-// distâncias envolvidas mudam de tamanho na tela por escorço (foreshortening),
-// mesmo sem o usuário abrir ou fechar os dedos de verdade. É a fonte mais
-// provável de escala se confundir com os outros três gestos. Limiar mais alto
-// exige uma abertura/fechamento bem mais deliberado antes de travar em
-// escala, o que reduz esse falso-positivo sem eliminar a causa (que exigiria
-// profundidade 3D por landmark, fora do que o MediaPipe 2D entrega aqui).
-const RATIO_THRESHOLD = 0.26;
+
+// NÃO HÁ GESTO DE ESCALA COM A MÃO — é deliberado, não um esquecimento.
+//
+// A escala vinha da razão polegar-indicador, normalizada pelo tamanho da mão
+// na imagem. Mas as duas distâncias são medidas 2D: quando a mão gira ou
+// inclina para MOVER, ALTURAR ou GIRAR, ambas mudam de tamanho na tela por
+// escorço (foreshortening), mesmo sem o usuário abrir ou fechar os dedos.
+// Ou seja, os outros três gestos geram sinal de escala por construção.
+//
+// Subir o limiar (tentado, 0.18 -> 0.26) só troca um erro por outro: reduz o
+// falso-positivo mas torna a escala real difícil de disparar. A causa exigiria
+// profundidade 3D por landmark, que o MediaPipe 2D não entrega. Com a escala
+// fora da arbitragem, os três gestos restantes ficam claramente distintos —
+// e a escala passa a ser um controle na tela (slider do HUD), onde é precisa,
+// reversível e não disputa sinal com nada.
 
 // Não basta o candidato vencedor cruzar seu limiar: ele precisa vencer o
 // segundo colocado por esta margem. Sem isto, um gesto na diagonal (que anda
@@ -55,18 +60,11 @@ const DOMINANCE_MARGIN = 1.45;
 const HEIGHT_TRAVEL_METERS = 1.5;
 const SMOOTHING = 12;
 
-// Ao fechar a pinça os filtros ainda estão convergindo. Sem esta carência, a
-// variação residual da razão polegar-indicador era classificada como gesto de
-// escala antes de o usuário mover qualquer coisa — escala involuntária.
-//
-// Mas a carência tem um custo: enquanto ela dura, grab.ratio é continuamente
-// rebaseado para o valor atual (ver manipulate()), o que também apaga
-// qualquer gesto real que aconteça dentro da janela. REDUZIR a escala é um
-// aperto pequeno e rápido dos dedos — cabe inteiro dentro de 250ms com folga,
-// e saía zerado antes de a classificação começar a valer. CRESCER é um gesto
-// maior e mais lento (abrir bem os dedos), raramente termina dentro da
-// janela — por isso só "reduzir" parava de funcionar, não escala em geral.
-// Encurtada para reduzir essa perda sem abrir mão da carência.
+// Ao fechar a pinça os filtros ainda estão convergindo, e essa variação
+// residual era classificada como gesto antes de o usuário mover qualquer
+// coisa. A carência ignora os primeiros instantes, rebaseando as referências
+// no valor corrente. Curta de propósito: enquanto dura, um gesto real feito
+// dentro da janela também é apagado.
 const GRAB_SETTLE_SECONDS = 0.12;
 
 export class HandController {
@@ -124,14 +122,13 @@ export class HandController {
   }
 
   /**
-   * Variação da razão polegar-indicador desde a pinça, em % — mesma ideia do
-   * rollDeltaDeg, para "reduzir escala" virar dado numa próxima tentativa
-   * em vez de mais um palpite. Negativo = fechando (reduzindo); positivo =
-   * abrindo (crescendo).
+   * Escala definida pelo controle na tela. Precisa entrar no `desired` também,
+   * senão applyDamping (que roda durante a pinça) puxaria o objeto de volta
+   * para o valor capturado quando a mão agarrou.
    */
-  get scaleDeltaPct() {
-    if (!this.grab || !this.sample) return null;
-    return (this.sample.pinchRatio / this.grab.ratio - 1) * 100;
+  setScale(scale) {
+    this.desired.scale = scale;
+    if (this.grab) this.grab.scale = scale;
   }
 
   /**
@@ -149,7 +146,7 @@ export class HandController {
     }
 
     this.lastTime = time;
-    const sample = this.analyzer.analyze(points, time, this.mode === "scale");
+    const sample = this.analyzer.analyze(points, time);
     this.sample = sample;
     if (!sample) {
       this.setState(HAND_STATE.IDLE);
@@ -190,7 +187,6 @@ export class HandController {
 
     this.grab = {
       pinch: { ...sample.pinch },
-      ratio: sample.pinchRatio,
       roll: sample.roll,
       scale: this.desired.scale,
       rotationY: this.desired.rotationY,
@@ -207,7 +203,6 @@ export class HandController {
     // Carência: rebaseia enquanto os sinais assentam, sem classificar nada.
     if (this.mode === null && time < this.grab.settleUntil) {
       this.grab.pinch = { ...sample.pinch };
-      this.grab.ratio = sample.pinchRatio;
       this.grab.roll = sample.roll;
       return;
     }
@@ -219,14 +214,11 @@ export class HandController {
       const moveProgress = Math.abs(dx) > Math.abs(dy) ? Math.abs(dx) / MOVE_THRESHOLD : 0;
       const heightProgress = Math.abs(dy) > Math.abs(dx) ? Math.abs(dy) / HEIGHT_THRESHOLD : 0;
       const rollProgress = Math.abs(sample.roll - this.grab.roll) / ROLL_THRESHOLD;
-      const ratioProgress =
-        Math.abs(sample.pinchRatio / this.grab.ratio - 1) / RATIO_THRESHOLD;
 
       const candidates = [
         { mode: "move", progress: moveProgress },
         { mode: "height", progress: heightProgress },
         { mode: "rotate", progress: rollProgress },
-        { mode: "scale", progress: ratioProgress },
       ].sort((a, b) => b.progress - a.progress);
       const [best, runnerUp] = candidates;
 
@@ -238,7 +230,6 @@ export class HandController {
 
       // Rebaseia para o modo não começar com um salto.
       this.grab.pinch = { ...sample.pinch };
-      this.grab.ratio = sample.pinchRatio;
       this.grab.roll = sample.roll;
       this.setState(HAND_STATE.MANIPULATING);
       this.onModeChange?.(this.mode);
@@ -272,12 +263,6 @@ export class HandController {
       );
     } else if (this.mode === "rotate") {
       this.desired.rotationY = this.grab.rotationY + (sample.roll - this.grab.roll);
-    } else if (this.mode === "scale") {
-      this.desired.scale = THREE.MathUtils.clamp(
-        this.grab.scale * (sample.pinchRatio / this.grab.ratio),
-        LIMITS.minScale,
-        LIMITS.maxScale
-      );
     }
   }
 

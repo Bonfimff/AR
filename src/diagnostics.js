@@ -16,7 +16,6 @@ const ROWS = [
   ["object", "OBJECT"],
   ["state", "STATE"],
   ["rollDelta", "ROLL Δ"],
-  ["scaleDelta", "SCALE Δ"],
   ["fps", "FPS"],
 ];
 

@@ -36,9 +36,16 @@
         <li><span class="g-icon g-move" aria-hidden="true">🤏<i>↔</i></span>Pinça e arrastar — mover</li>
         <li><span class="g-icon g-height" aria-hidden="true">🤏<i>↕</i></span>Pinça e subir/descer — altura</li>
         <li><span class="g-icon g-rotate" aria-hidden="true">🤏<i>⟳</i></span>Pinça e girar o pulso — girar</li>
-        <li><span class="g-icon g-scale" aria-hidden="true">🤏<i>⤢</i></span>Pinça e abrir/fechar os dedos — escala</li>
+        <li><span class="g-icon" aria-hidden="true">⤢</span>Escala: pela barra na tela</li>
       </ul>
       <button id="gesture-legend-close" class="btn-tiny">Entendi</button>
+    </div>
+
+    <div id="scale-control" class="scale-control" hidden>
+      <label for="scale-range">Escala</label>
+      <input id="scale-range" type="range" min="0" max="1000" value="500" step="1"
+             aria-label="Escala do equipamento" />
+      <output id="scale-value">100%</output>
     </div>
 
     <div class="hud-buttons">

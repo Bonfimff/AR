@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import { loadEquipment, createSelectionIndicator, disposeObject } from "./equipment.js";
-import { GestureController } from "./gestures.js";
+import { GestureController, LIMITS } from "./gestures.js";
 import {
   DEPTH_SENSING_INIT,
   inspectDepthSensing,
@@ -39,6 +39,7 @@ export class ARExperience {
     onDiagnostics,
     onGestureMode,
     onHandDetected,
+    onScale,
     onEnd,
   }) {
     this.model = getModel(modelId);
@@ -50,7 +51,9 @@ export class ARExperience {
     this.onDiagnostics = onDiagnostics;
     this.onGestureMode = onGestureMode;
     this.onHandDetected = onHandDetected;
+    this.onScale = onScale;
     this.onEnd = onEnd;
+    this.lastReportedScale = 1;
     this.handEverDetected = false;
 
     this.session = null;
@@ -366,6 +369,34 @@ export class ARExperience {
     this.onStatus("Aponte para uma superfície e mova o celular devagar");
   }
 
+  /**
+   * Escala definida pelo controle na tela. Escreve nos DOIS controladores além
+   * do objeto: cada um mantém seu próprio `desired.scale` e, sem isto, o
+   * primeiro frame de suavização puxaria o objeto de volta ao valor antigo.
+   */
+  setScale(scale) {
+    if (!this.equipment) return;
+    const clamped = THREE.MathUtils.clamp(scale, LIMITS.minScale, LIMITS.maxScale);
+    this.equipment.scale.setScalar(clamped);
+    this.gestures?.setScale(clamped);
+    this.handController?.setScale(clamped);
+    this.lastReportedScale = clamped;
+    this.markInteracted();
+  }
+
+  /**
+   * A pinça de dois dedos continua escalando (é um gesto de TELA, e o pedido
+   * era tirar a escala da MÃO). Como as duas fontes escrevem na mesma escala,
+   * o slider precisa acompanhar o gesto — senão exibe um valor mentiroso.
+   */
+  reportScale() {
+    if (!this.equipment || !this.onScale) return;
+    const scale = this.equipment.scale.x;
+    if (Math.abs(scale - (this.lastReportedScale ?? -1)) < 0.001) return;
+    this.lastReportedScale = scale;
+    this.onScale(scale);
+  }
+
   /** Alterna vista montada/explodida. Devolve {explodable, exploded}. */
   toggleExplode() {
     if (!this.explode?.explodable) return { explodable: false, exploded: false };
@@ -394,6 +425,8 @@ export class ARExperience {
     this.equipment.position.set(0, 0, 0);
     this.equipment.rotation.set(0, 0, 0);
     this.equipment.scale.setScalar(1);
+    this.lastReportedScale = 1;
+    this.onScale?.(1); // devolve o slider ao 100% junto com o objeto
     if (this.equipment.parent !== this.anchorGroup) this.anchorGroup.add(this.equipment);
 
     this.onStatus(this.hasInteracted ? "" : "Toque no objeto para manipular");
@@ -453,6 +486,7 @@ export class ARExperience {
         this.gestures?.update(delta);
         this.updateHand(view, time, delta);
         this.explode?.update(delta);
+        this.reportScale();
       }
 
       this.cpuOcclusion?.update(frame, view, this.getXRCamera(), this.renderer);
@@ -524,10 +558,6 @@ export class ARExperience {
         rollDelta:
           this.handController?.rollDeltaDeg != null
             ? `${this.handController.rollDeltaDeg.toFixed(1)}°`
-            : "—",
-        scaleDelta:
-          this.handController?.scaleDeltaPct != null
-            ? `${this.handController.scaleDeltaPct.toFixed(0)}%`
             : "—",
         fps: this.fps.value,
       },

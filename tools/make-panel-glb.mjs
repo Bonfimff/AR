@@ -51,9 +51,6 @@ const EXPLODE = {
   Fileira2: [0, 0, 0.55],
   Fileira3: [0, 0.15, 0.65],
   Barramentos: [-0.25, 0, 0.25],
-  GrelhaSuperior: [0, 0.15, 0.40],
-  GrelhaInferior: [0, -0.15, 0.40],
-  Indicadores: [0, 0, 0.35],
   PrensaCabos: [0, -0.20, -0.30],
 };
 
@@ -154,11 +151,13 @@ for (const y of [0.45, 1.0, 1.55]) {
 box("Porta", M.Ferragem, [W / 2 - 0.10, 1.05, doorZ + 0.03], [0.05, 0.16, 0.03]);
 cylinder("Porta", M.Ferragem, [W / 2 - 0.10, 1.05, doorZ + 0.07], 0.014, 0.10, "y");
 
-// grelhas de ventilação (duas peças, cada uma com suas lâminas)
-for (const [part, baseY] of [["GrelhaSuperior", 1.72], ["GrelhaInferior", 0.30]]) {
+// grelhas de ventilação — são RECORTES NA CHAPA DA PORTA, não peças avulsas:
+// ficam em "Porta" para viajarem com ela na vista explodida. Mesmo critério da
+// maçaneta e das dobradiças (ver abaixo, também em "Porta").
+for (const baseY of [1.72, 0.30]) {
   for (let i = 0; i < 10; i += 1) {
-    box(part, M.Vao, [-0.18, baseY + i * 0.014, doorZ + 0.016], [0.26, 0.006, 0.004]);
-    box(part, M.Vao, [0.18, baseY + i * 0.014, doorZ + 0.016], [0.26, 0.006, 0.004]);
+    box("Porta", M.Vao, [-0.18, baseY + i * 0.014, doorZ + 0.016], [0.26, 0.006, 0.004]);
+    box("Porta", M.Vao, [0.18, baseY + i * 0.014, doorZ + 0.016], [0.26, 0.006, 0.004]);
   }
 }
 
@@ -180,12 +179,13 @@ for (const x of [-0.30, -0.26, -0.22]) {
   box("Barramentos", M.Barramento, [x, 1.35, railZ - 0.02], [0.012, 0.62, 0.006]);
 }
 
-// lâmpadas de sinalização e placa de identificação
+// lâmpadas de sinalização e placa de identificação: também MONTADAS NA PORTA
+// (furos na chapa frontal), então pertencem à peça "Porta".
 const lamps = [M.LampadaVerde, M.LampadaVermelha, M.LampadaAmbar];
 for (let i = 0; i < 6; i += 1) {
-  cylinder("Indicadores", lamps[i % 3], [-0.24 + i * 0.095, 1.62, doorZ + 0.022], 0.014, 0.014, "z");
+  cylinder("Porta", lamps[i % 3], [-0.24 + i * 0.095, 1.62, doorZ + 0.022], 0.014, 0.014, "z");
 }
-box("Indicadores", M.Placa, [0, 1.45, doorZ + 0.018], [0.34, 0.10, 0.004]);
+box("Porta", M.Placa, [0, 1.45, doorZ + 0.018], [0.34, 0.10, 0.004]);
 
 // prensa-cabos na base
 for (let i = 0; i < 6; i += 1) {

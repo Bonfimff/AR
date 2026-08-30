@@ -124,8 +124,10 @@ Abra no celular a URL `https://…` gerada.
    - **2 dedos deslizando para cima/baixo**: altura.
    Cada gesto de dois dedos trava em UM modo por vez; solte os dedos para trocar.
    Um rótulo discreto no rodapé confirma qual modo está ativo.
-9. Toque fora do objeto para desselecionar. **Reposicionar** recoloca. **Sair da AR** encerra.
-10. **Vista explodida**: toque no botão para ver as peças do gabinete se separarem;
+9. **Barra de escala** acima dos botões: 20% a 500%, com 100% no meio do curso.
+   É a única forma de escalar com a mão livre (ver "Controle por mão").
+10. Toque fora do objeto para desselecionar. **Reposicionar** recoloca. **Sair da AR** encerra.
+11. **Vista explodida**: toque no botão para ver as peças do gabinete se separarem;
     **Remontar** volta tudo ao lugar. Funciona junto com escala/giro/altura normalmente.
 
 Para testar a oclusão: com o objeto colocado, passe a mão entre o celular e o
@@ -146,10 +148,11 @@ Gestos (com o objeto colocado, mão diante da câmera):
 
 - **🤏 pinça sobre o equipamento** — seleciona e segura;
 - **mover a mão na horizontal** — desloca sobre a superfície;
-- **afastar/aproximar polegar e indicador** — escala;
 - **girar a mão** — rotação no eixo vertical;
 - **subir/descer a mão** — altura;
 - **✋ abrir a mão** — solta; o objeto fica exatamente onde está.
+
+**Escala não é um gesto de mão** — é a barra na tela. Ver abaixo o porquê.
 
 Cada manipulação trava em **um** modo. Não basta o primeiro sinal cruzar seu
 limiar — ele precisa vencer o segundo colocado por 45% de folga
@@ -157,9 +160,9 @@ limiar — ele precisa vencer o segundo colocado por 45% de folga
 [gestures.js](src/gestures.js)). Sem essa margem, um gesto na diagonal (que
 anda um pouco em X e em Y ao mesmo tempo) podia travar no modo errado só
 porque um eixo cruzou o limiar um instante antes do outro — a mesma folga
-existe para toque e para mão. Há também uma carência de 0,25 s após fechar a
+existe para toque e para mão. Há também uma carência de 0,12 s após fechar a
 pinça, durante a qual nada é classificado — sem ela, a própria convergência
-dos filtros era lida como gesto de escala.
+dos filtros era lida como gesto.
 
 **Giro não funcionava.** O sinal vinha do vetor punho -> dedo médio, que
 aponta na mesma direção do próprio giro do pulso — girar o pulso em torno do
@@ -179,37 +182,46 @@ restrita) dificulta alcançar — baixado para ~11°. Também adicionado
 desde que a pinça fechou, então uma próxima tentativa que falhar mostra o
 número real em vez de exigir mais um palpite.
 
-**Escala se confundindo com os outros gestos.** A razão polegar-indicador é
-normalizada pelo tamanho da mão na imagem (distância punho->dedo médio) —
-mas as duas são medidas 2D, e escorço (foreshortening) as altera quando a
-mão gira ou inclina para MOVER, ALTURAR ou GIRAR, mesmo sem o usuário abrir
-ou fechar os dedos de verdade. `RATIO_THRESHOLD` subiu de 0,18 para 0,26:
-exige uma abertura/fechamento bem mais deliberado antes de travar em escala,
-o que reduz o falso-positivo sem eliminar a causa — isso exigiria
-profundidade 3D por landmark, que o MediaPipe 2D usado aqui não entrega.
+### Por que a escala saiu dos gestos de mão
 
-**Reduzir a escala especificamente não funcionava.** Selecionar já exige a
-pinça fechada (ratio < 0,42); apertar os dedos ainda mais para encolher é um
-movimento pequeno e rápido, enquanto abrir para crescer é maior e mais lento.
-Os dois sofriam o mesmo problema por um caminho diferente do de cima: durante
-a carência de 0,25 s depois da pinça, `grab.ratio` é continuamente rebaseado
-para o valor atual — necessário para não confundir a convergência do filtro
-com um gesto real (ver acima), mas isso também apaga qualquer gesto genuíno
-que termine dentro da janela. Um aperto rápido cabe inteiro em 250 ms; abrir
-bem os dedos, raramente. `GRAB_SETTLE_SECONDS` caiu para 0,12 s, e o filtro
-da razão (`ratio` em [hand-analyzer.js](src/hand/hand-analyzer.js)) ficou
-menos rígido (beta 0,01 -> 0,04) para reagir mais rápido a um aperto de
-verdade. Mesmo assim, um aperto MUITO rápido ainda pode caber dentro da
-janela menor — por isso também ganhou `SCALE Δ` no painel, mesma lógica do
-`ROLL Δ`: mostra a variação real da razão em %, positiva ao crescer e
-negativa ao reduzir, para a próxima tentativa virar dado. Se `SCALE Δ` mal
-sair do zero ao reduzir, o problema ainda é a janela/filtro; se passar de
--26% e nada encolher, o suspeito passa a ser o limite mínimo de escala
-(`LIMITS.minScale = 0.2` em [gestures.js](src/gestures.js)) — o objeto pode
-já estar no piso de 20% do tamanho original.
+O sinal de escala era a razão polegar-indicador, normalizada pelo tamanho da
+mão na imagem (distância punho -> dedo médio). Mas **as duas medidas são 2D**:
+escorço (*foreshortening*) altera ambas quando a mão gira ou inclina para
+MOVER, ALTURAR ou GIRAR — mesmo sem o usuário abrir ou fechar os dedos. Ou
+seja, os outros três gestos produzem sinal de escala **por construção**.
+
+Duas tentativas de ajuste falharam no aparelho, cada uma trocando um erro por
+outro:
+
+1. `RATIO_THRESHOLD` 0,18 -> 0,26 (exigir abertura mais deliberada): reduziu o
+   falso-positivo, mas escalar de verdade ficou difícil de disparar.
+2. `GRAB_SETTLE_SECONDS` 0,25 -> 0,12 s + filtro da razão menos rígido, para
+   que um aperto rápido (reduzir) não fosse absorvido pela carência: **reduzir
+   continuou não funcionando**, e a confusão com os outros gestos voltou.
+
+A causa real exigiria profundidade 3D por landmark, que o MediaPipe 2D usado
+aqui não entrega — nenhum limiar resolve. Então a escala saiu da arbitragem
+de mão e virou um **controle na tela**. Com três candidatos em vez de quatro
+(mover / altura / girar), e sem o que era a fonte de ruído, os gestos
+restantes ficam claramente distintos entre si.
+
+A barra é **logarítmica** (0,2x .. 5x, com 1x exatamente no meio do curso):
+numa barra linear todo o intervalo de *reduzir* caberia em 16% do curso e
+seria impossível de ajustar com o polegar. Em log, reduzir pela metade e
+dobrar andam o mesmo tanto — que é como a escala é percebida. O mapeamento
+está em [app.js](app.js) (`sliderToScale`/`scaleToSlider`).
+
+A pinça de **dois dedos na tela** continua escalando: o pedido era tirar a
+escala da *mão*, e o toque não sofre do problema de escorço. Como as duas
+fontes escrevem no mesmo transform, `reportScale()` em
+[ar-experience.js](src/ar-experience.js) devolve a escala corrente para a
+barra acompanhar o gesto — senão ela exibiria um valor mentiroso. No sentido
+inverso, `setScale()` escreve no `desired.scale` dos **dois** controladores,
+porque cada um mantém o seu: sem isso, o primeiro frame de suavização puxaria
+o objeto de volta ao valor antigo.
 
 Qual modo está ativo aparece na tela — um rótulo discreto (`↔ Movendo`,
-`⤢ Escala`, `⟳ Girando`, `↕ Altura`, `🤏 Selecionado`) que some sozinho quando
+`⟳ Girando`, `↕ Altura`, `🤏 Selecionado`) que some sozinho quando
 o gesto termina. Na primeira vez que a mão é detectada, uma legenda anima
 cada ícone do jeito do próprio gesto (desliza, sobe/desce, gira, pulsa) e
 explica o vocabulário completo; ela só aparece uma vez por aparelho (fica
@@ -223,8 +235,7 @@ fica suspenso, para que os dois nunca escrevam no mesmo transform.
 
 Botão **Vista explodida** no HUD (aparece depois de colocar o equipamento):
 separa as peças do gabinete — porta, topo, laterais, fundo, as três fileiras
-de disjuntores, barramentos, grelhas, lâmpadas/placa, prensa-cabos — com uma
-transição suave de 0,6 s. **Remontar** volta tudo ao lugar. Reposicionar o
+de disjuntores, barramentos, prensa-cabos — com uma transição suave de 0,6 s. **Remontar** volta tudo ao lugar. Reposicionar o
 equipamento também remonta, para não deixar peças soltas para trás numa nova
 colocação.
 
@@ -237,6 +248,15 @@ hardcoded fora do modelo. Um modelo sem peças marcadas simplesmente não tem
 o que explodir, e o botão fica escondido (`onPlaced(explodable)` em
 [ar-experience.js](src/ar-experience.js)); trocar de modelo no futuro não
 exige tocar em nenhuma lógica aqui, só marcar as peças no gerador do GLB novo.
+
+**O que é peça e o que é detalhe de uma peça.** A primeira versão tratava
+grelhas de ventilação, lâmpadas de sinalização e placa de identificação como
+peças próprias — e elas saíam voando sozinhas, deixando a porta como uma
+chapa lisa. Mas grelha é um *recorte na chapa da porta* e lâmpada é um *furo
+na chapa*: não são componentes desmontáveis, são features da porta, do mesmo
+jeito que a maçaneta e as dobradiças (que já estavam certas). Foram
+incorporadas ao nó `Porta` e agora viajam com ela. O critério, para peças
+futuras: uma peça é o que um técnico desparafusaria e tiraria inteiro.
 
 Duas peças (`Rodape`, `Vao` — o piso do gabinete e o vão interno escuro)
 ficam de fora do mapa de explosão de propósito: servem de esqueleto fixo

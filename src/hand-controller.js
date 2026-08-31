@@ -68,11 +68,13 @@ const SMOOTHING = 12;
 const GRAB_SETTLE_SECONDS = 0.12;
 
 export class HandController {
-  constructor({ getCamera, getRect, onStateChange, onModeChange }) {
+  constructor({ getCamera, getRect, onStateChange, onModeChange, onPointTap }) {
     this.getCamera = getCamera;
     this.getRect = getRect;
     this.onStateChange = onStateChange;
     this.onModeChange = onModeChange;
+    this.onPointTap = onPointTap;
+    this._wasPointing = false;
 
     this.analyzer = new HandAnalyzer();
     this.ray = new ScreenRay();
@@ -140,6 +142,7 @@ export class HandController {
     if (!this.enabled || !points) {
       if (this.grab) this.release();
       this.analyzer.reset();
+      this._wasPointing = false;
       this.sample = null;
       this.setState(HAND_STATE.IDLE);
       return;
@@ -153,6 +156,8 @@ export class HandController {
       return;
     }
 
+    this.detectPointTap(sample);
+
     if (!this.grab) {
       this.setState(sample.pinching ? HAND_STATE.PINCH_DETECTED : HAND_STATE.HAND_DETECTED);
       if (sample.pinching) this.tryGrab(sample);
@@ -164,6 +169,26 @@ export class HandController {
     }
 
     this.applyDamping(delta);
+  }
+
+  /**
+   * 👉 apontar = "tocar" na peça. Dispara na BORDA DE SUBIDA do gesto: uma
+   * ação por gesto, e o dedo precisa sair da pose para poder acionar de novo.
+   * Sem isso, manter o dedo apontado abriria e fecharia a porta a cada frame.
+   *
+   * Nunca dispara com algo agarrado: pinça e apontar são poses mutuamente
+   * exclusivas, e manipular tem prioridade sobre acionar.
+   */
+  detectPointTap(sample) {
+    const pointing = Boolean(sample.pointing) && !this.grab;
+    if (pointing && !this._wasPointing) {
+      const rect = this.getRect();
+      this.onPointTap?.(
+        sample.indexTip.x * rect.width + rect.left,
+        sample.indexTip.y * rect.height + rect.top
+      );
+    }
+    this._wasPointing = pointing;
   }
 
   tryGrab(sample) {

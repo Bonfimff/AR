@@ -26,6 +26,13 @@ export const LIMITS = {
 const TAP_MAX_MS = 300;
 const TAP_MAX_PX = 12;
 
+// Zona morta do arrasto: o objeto só começa a se mover depois que o dedo andou
+// isto. IGUAL a TAP_MAX_PX de propósito — assim tap e arrasto são mutuamente
+// exclusivos por construção. Sem esta zona, o objeto se deslocava no PRIMEIRO
+// pointermove, então o tremor natural do dedo ao tocar num disjuntor arrastava
+// o quadro junto: a manobra acontecia, mas o equipamento saía do lugar.
+const DRAG_MIN_PX = TAP_MAX_PX;
+
 // Limiares de arbitragem: quanto o gesto precisa andar para definir o modo.
 const SCALE_THRESHOLD = 0.1; // variação relativa da distância entre os dedos
 const ROTATE_THRESHOLD = 0.18; // radianos (~10°)
@@ -199,6 +206,16 @@ export class GestureController {
     this.mode = "drag";
     this.subMode = null;
     this._dragAnnounced = false; // só avisa "movendo" quando o arrasto for real, não num toque
+    this._dragEngaged = false; // ainda dentro da zona morta
+    this._dragStart = { x: clientX, y: clientY };
+    this.rebaseDrag(clientX, clientY);
+  }
+
+  /**
+   * (Re)define o ponto de pega: a distância entre o objeto e o raio do dedo.
+   * Preservá-la é o que faz o objeto seguir o dedo sem saltar.
+   */
+  rebaseDrag(clientX, clientY) {
     this.target.getWorldPosition(_worldPosition);
     this.plane.setFromNormalAndCoplanarPoint(THREE.Object3D.DEFAULT_UP, _worldPosition);
     const hit = this.rayToPlane(clientX, clientY);
@@ -207,6 +224,15 @@ export class GestureController {
   }
 
   updateDrag(clientX, clientY) {
+    // Dentro da zona morta o objeto não se mexe. Ao cruzá-la, refazemos o ponto
+    // de pega a partir da posição ATUAL do dedo — senão o objeto saltaria de uma
+    // vez a distância já percorrida.
+    if (!this._dragEngaged) {
+      if (distance(this._dragStart, { x: clientX, y: clientY }) <= DRAG_MIN_PX) return;
+      this._dragEngaged = true;
+      this.rebaseDrag(clientX, clientY);
+    }
+
     const hit = this.rayToPlane(clientX, clientY);
     if (!hit) return;
 

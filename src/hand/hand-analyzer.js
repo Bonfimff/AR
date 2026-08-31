@@ -41,6 +41,24 @@ export const FINGERS = {
 const PINCH_ON = 0.42;
 const PINCH_OFF = 0.62;
 
+// Apontar (👉): indicador esticado com médio, anelar e mínimo recolhidos.
+// Medido como razão entre a distância ponta->punho e junta->punho, então
+// vale igual com a mão perto ou longe da câmera, como os limiares da pinça.
+//
+// A folga entre os dois limiares é o que separa o gesto de uma mão relaxada:
+// o indicador precisa estar CLARAMENTE esticado (1,25) e os outros CLARAMENTE
+// dobrados (1,02), senão qualquer mão meio aberta viraria um toque acidental.
+// O polegar fica de fora de propósito — apontar com o polegar colado ou
+// levantado é indiferente, e exigir uma das duas formas só geraria falha.
+const POINT_INDEX_MIN = 1.25;
+const POINT_OTHERS_MAX = 1.02;
+
+// Frames consecutivos para ligar/desligar. O gesto dispara UMA ação por vez,
+// então um falso positivo custa caro (abrir a porta sem querer) — daí exigir
+// mais confirmação para entrar do que para sair.
+const POINT_FRAMES_ON = 4;
+const POINT_FRAMES_OFF = 2;
+
 export class HandAnalyzer {
   constructor() {
     this.pinchPoint = new OneEuroVec2({ minCutoff: 1.4, beta: 0.03 });
@@ -55,6 +73,11 @@ export class HandAnalyzer {
     // trocar a fonte do sinal.
     this.rollFilter = new OneEuroFilter({ minCutoff: 1.5, beta: 0.06 });
     this.gate = new HysteresisGate({ onBelow: PINCH_ON, offAbove: PINCH_OFF });
+    // Mira do gesto de apontar: a ponta do indicador, filtrada. Sem filtro, o
+    // tremor da mão faz o raio varrer vários centímetros no equipamento.
+    this.indexPoint = new OneEuroVec2({ minCutoff: 1.2, beta: 0.02 });
+    this.pointing = false;
+    this.pointStreak = 0;
     this.unwrappedRoll = 0;
     this.lastRawRoll = null;
     this._out = {};
@@ -66,6 +89,9 @@ export class HandAnalyzer {
     this.ratio.reset();
     this.rollFilter.reset();
     this.gate.reset();
+    this.indexPoint.reset();
+    this.pointing = false;
+    this.pointStreak = 0;
     this.unwrappedRoll = 0;
     this.lastRawRoll = null;
   }
@@ -112,6 +138,18 @@ export class HandAnalyzer {
 
     const pinching = this.gate.update(ratio, PINCH_OFF);
 
+    // Apontar nunca coexiste com pinça: na pinça o indicador está dobrado
+    // contra o polegar, então a checagem abaixo já falharia — mas negar aqui
+    // deixa a exclusão explícita em vez de acidental.
+    const wantsPoint = !pinching && isPointingPose(points, wrist);
+    if (wantsPoint === this.pointing) {
+      this.pointStreak = 0;
+    } else if (++this.pointStreak >= (this.pointing ? POINT_FRAMES_OFF : POINT_FRAMES_ON)) {
+      this.pointing = wantsPoint;
+      this.pointStreak = 0;
+    }
+    const aim = this.indexPoint.filter(indexTip, time, {});
+
     return {
       present: true,
       pinching,
@@ -120,9 +158,27 @@ export class HandAnalyzer {
       palm: { x: palm.x, y: palm.y },
       roll,
       handSpan: span,
+      pointing: this.pointing,
+      indexTip: { x: aim.x, y: aim.y },
       extendedFingers: countExtendedFingers(points, wrist),
     };
   }
+}
+
+/** Quanto o dedo está esticado: >1 afasta a ponta do punho mais que a junta. */
+function extension(points, wrist, finger) {
+  const tip = points[finger.tip];
+  const pip = points[finger.pip];
+  if (!tip || !pip) return 0;
+  return distance(tip, wrist) / Math.max(distance(pip, wrist), 1e-4);
+}
+
+/** 👉 indicador esticado, os outros três recolhidos. */
+function isPointingPose(points, wrist) {
+  if (extension(points, wrist, FINGERS.indicador) < POINT_INDEX_MIN) return false;
+  return [FINGERS.medio, FINGERS.anelar, FINGERS.minimo].every(
+    (finger) => extension(points, wrist, finger) < POINT_OTHERS_MAX
+  );
 }
 
 /** Mão aberta (✋) = vários dedos estendidos. Usado só para diagnóstico. */

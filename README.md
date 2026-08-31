@@ -29,7 +29,10 @@ src/diagnostics.js             UI de diagnóstico + medidor de FPS
 src/models.js                  MODEL LOADER: registro e dimensões reais
 src/equipment.js               carregamento/normalização/descarte do GLB
 models/equipamento.glb         modelo — SUBSTITUA por este arquivo pelo real
+tools/glb.mjs                  CONSTRUTOR GLB compartilhado (peças, hierarquia, extras)
 tools/make-panel-glb.mjs       gerador do quadro elétrico (modelo próprio)
+tools/make-elements-glb.mjs    gerador da biblioteca: tomada, interruptor, luminária, eletroduto
+tools/test-circuits.mjs        testes do modelo elétrico (node tools/test-circuits.mjs)
 tools/make-placeholder-glb.mjs gerador do cubo simples da V1
 ```
 
@@ -63,6 +66,39 @@ seis lâmpadas de sinalização, placa de identificação e prensa-cabos.
 
 Optei por gerar o modelo em vez de baixar um de terceiros justamente para não
 deixar nenhuma dúvida de licença numa apresentação comercial.
+
+## Biblioteca de elementos
+
+Além do quadro, `tools/make-elements-glb.mjs` gera os elementos da instalação,
+um GLB por tipo:
+
+| Elemento | Circuito local | Peça acionável |
+|---|---|---|
+| Tomada | `outlet` | — (marcador de energização) |
+| Interruptor | `switch` | a tecla |
+| Luminária | `lamp` | — (o difusor acende) |
+| Eletroduto | nenhum | — (infraestrutura) |
+
+**Cada arquivo carrega o próprio esquema elétrico** em `scene.extras.circuits`,
+descrevendo só o que ele contém — sem fonte e sem disjuntor. A ligação com o
+quadro acontece em runtime, quando o usuário associa a carga a um circuito.
+
+O construtor de GLB foi extraído para [tools/glb.mjs](tools/glb.mjs) quando
+surgiu o segundo gerador: a geometria muda de um elemento para outro, mas o
+empacotamento (acumular por peça, montar accessors, hierarquia de nós,
+cabeçalho GLB) é idêntico e não deve ser copiado.
+
+Estes elementos **não usam `fitToDimensions`**: já são gerados em metros reais.
+Reescalar reintroduziria um erro que a geração procedural não tem.
+
+**`metallic` é baixo de propósito** nestes modelos. A cena não tem environment
+map, e metal muito metálico não tem o que refletir — renderiza quase preto. Isso
+vale em AR tanto quanto no teste; a primeira versão da luminária saiu como um
+disco preto por causa disso.
+
+> **Ainda não integrados à cena**: os modelos existem e carregam, mas o app
+> continua colocando um único equipamento. Acrescentá-los à cena é o próximo
+> passo.
 
 ## Substituir o modelo
 
@@ -119,7 +155,10 @@ Abra no celular a URL `https://…` gerada.
 5. Toque na tela para posicionar o equipamento.
 6. Caminhe ao redor: o objeto deve permanecer no mesmo ponto físico.
 7. **Toque no objeto** para selecioná-lo — um anel discreto aparece na base.
-8. Gestos (só com o objeto selecionado):
+8. Gestos (só com o objeto selecionado). O objeto só sai do lugar depois que o
+   dedo anda mais de 12 px — abaixo disso o toque conta como *tap* e nada se
+   move, senão o tremor natural do dedo arrastaria o quadro ao acionar um
+   disjuntor:
    - **1 dedo arrastando**: move sobre a superfície;
    - **2 dedos afastando/aproximando**: escala;
    - **2 dedos girando**: rotação no eixo vertical;
@@ -156,7 +195,34 @@ Gestos (com o objeto colocado, mão diante da câmera):
 - **mover a mão na horizontal** — desloca sobre a superfície;
 - **girar a mão** — rotação no eixo vertical;
 - **subir/descer a mão** — altura;
-- **✋ abrir a mão** — solta; o objeto fica exatamente onde está.
+- **✋ abrir a mão** — solta; o objeto fica exatamente onde está;
+- **👉 apontar o indicador** — "toca" na peça mirada: abre a porta, liga/desliga
+  o disjuntor.
+
+### 👉 Apontar como gesto de toque
+
+O indicador esticado com médio, anelar e mínimo recolhidos. Medido pela razão
+entre a distância ponta→punho e junta→punho, então vale igual com a mão perto
+ou longe da câmera — mesma lógica adaptativa dos limiares de pinça.
+
+A folga entre os dois limiares (indicador > 1,25; os outros < 1,02) é o que
+separa o gesto de uma mão apenas relaxada. O polegar fica **de fora de
+propósito**: apontar com ele colado ou levantado é indiferente, e exigir uma
+das duas formas só geraria falha.
+
+Dispara na **borda de subida**, uma ação por gesto — o dedo precisa sair da
+pose para acionar de novo, senão manter o dedo apontado abriria e fecharia a
+porta a cada frame. Nunca dispara com algo agarrado: manipular tem prioridade
+sobre acionar.
+
+São exigidos 4 frames consecutivos para ligar e 2 para desligar. Assimétrico
+porque um falso positivo custa caro (abrir a porta sem querer) e um falso
+negativo custa só repetir o gesto.
+
+Diferente do toque na tela, apontar **não exige selecionar antes**. A regra de
+"só opera se já estiver selecionado" existe porque no touchscreen o mesmo toque
+que mira também seleciona; apontar é uma pose deliberada e distinta, sem esse
+risco.
 
 **Escala não é um gesto de mão** — é a barra na tela. Ver abaixo o porquê.
 

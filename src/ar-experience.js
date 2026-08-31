@@ -215,6 +215,7 @@ export class ARExperience {
       getRect: () => this.gestureLayer.getBoundingClientRect(),
       onStateChange: (state) => this.onHandStateChange(state),
       onModeChange: (mode) => this.onGestureMode?.(mode),
+      onPointTap: (x, y) => this.handlePointTap(x, y),
     });
     this.handController.setTarget(this.equipment ?? null);
   }
@@ -339,6 +340,23 @@ export class ARExperience {
     // equipamento pela primeira vez.
     if (this.selected && this.panel?.handlePick(hitObject)) return;
     this.setSelected(true);
+  }
+
+  /**
+   * 👉 apontar com o indicador: aciona a peça mirada.
+   *
+   * Diferente do toque na tela, NÃO exige selecionar antes. A regra de "só
+   * opera se já estiver selecionado" existe porque no touchscreen o mesmo
+   * toque que mira também seleciona, e sem ela o primeiro toque já desligaria
+   * um circuito. Apontar é uma pose deliberada e distinta — não há esse risco,
+   * e exigir uma pinça antes só tornaria o gesto trabalhoso.
+   */
+  handlePointTap(clientX, clientY) {
+    if (this.awaitingPlacement || !this.equipment) return;
+    const hitObject = this.raycastEquipment(clientX, clientY);
+    if (!hitObject) return;
+    this.setSelected(true);
+    if (!this.panel?.handlePick(hitObject)) this.onGestureMode?.("point");
   }
 
   raycastEquipment(clientX, clientY) {

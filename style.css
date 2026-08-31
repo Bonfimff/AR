@@ -325,6 +325,17 @@ canvas {
   animation: g-pulse-select 1.1s ease-in-out infinite;
 }
 
+/* Apontar: o dedo "cutuca" para a frente, imitando o gesto. */
+.g-point {
+  display: inline-block;
+  animation: g-poke 1.2s ease-in-out infinite;
+}
+
+@keyframes g-poke {
+  0%, 100% { transform: translateX(-3px); }
+  55% { transform: translateX(5px); }
+}
+
 @keyframes g-slide-x {
   0%, 100% { transform: translateX(-4px); }
   50% { transform: translateX(4px); }
@@ -353,7 +364,8 @@ canvas {
 /* Quem pede menos movimento na plataforma não precisa disto piscando. */
 @media (prefers-reduced-motion: reduce) {
   .g-icon i,
-  .g-select {
+  .g-select,
+  .g-point {
     animation: none;
   }
 }

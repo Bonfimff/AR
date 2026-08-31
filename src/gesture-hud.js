@@ -14,11 +14,13 @@ const MODE_LABELS = {
   height: "↕ Altura",
   rotate: "⟳ Girando",
   scale: "⤢ Escala",
+  point: "👉 Apontando",
 };
 
-// "Selecionado" é transitório: se nenhum eixo travar em seguida, ele some
-// sozinho em vez de ficar preso na tela.
+// "Selecionado" e "Apontando" são transitórios: se nada travar em seguida,
+// somem sozinhos em vez de ficarem presos na tela.
 const SELECTED_TIMEOUT_MS = 1400;
+const TRANSIENT_MODES = new Set(["selected", "point"]);
 
 const HINT_STORAGE_KEY = "ar-hand-gesture-hint-v1";
 
@@ -31,7 +33,7 @@ export class GestureHud {
     legendCloseEl?.addEventListener("click", () => this.hideHandLegend());
   }
 
-  /** @param {'selected'|'move'|'height'|'rotate'|'scale'|null} mode */
+  /** @param {'selected'|'move'|'height'|'rotate'|'scale'|'point'|null} mode */
   showMode(mode) {
     clearTimeout(this._selectedTimer);
     if (!mode || !MODE_LABELS[mode]) {
@@ -40,7 +42,7 @@ export class GestureHud {
     }
     this.badgeEl.hidden = false;
     this.badgeEl.textContent = MODE_LABELS[mode];
-    if (mode === "selected") {
+    if (TRANSIENT_MODES.has(mode)) {
       this._selectedTimer = setTimeout(() => {
         this.badgeEl.hidden = true;
       }, SELECTED_TIMEOUT_MS);

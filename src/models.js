@@ -1,15 +1,14 @@
 /**
  * Registro de modelos 3D.
  *
- * Hoje a experiência carrega apenas um modelo (DEFAULT_MODEL_ID). O registro
- * existe para que adicionar novos equipamentos seja só acrescentar uma entrada
- * aqui e um GLB em /models — sem catálogo, sem backend, sem UI de seleção.
+ * `DEFAULT_MODEL_ID` é o equipamento âncora da cena — o que se posiciona
+ * primeiro e serve de referência. Os demais entram pelo catálogo (`addable`),
+ * e são os elementos que o usuário vai espalhando pela instalação.
  *
- * Exemplo de expansão futura:
- *   nobreak: { url: "models/nobreak.glb", label: "Nobreak",
- *              dimensions: { width: 0.4, height: 0.9, depth: 0.7 }, fitToDimensions: true },
- *   rack:    { url: "models/rack.glb",    label: "Rack 42U",
- *              dimensions: { width: 0.6, height: 2.0, depth: 1.0 }, fitToDimensions: true },
+ * Acrescentar um elemento é uma entrada aqui mais um GLB em /models. O
+ * comportamento (o que é clicável, o que acende, qual o esquema elétrico
+ * local) viaja DENTRO do GLB, em `extras` — ver tools/glb.mjs. Nenhum nome de
+ * peça aparece no código do app.
  */
 export const MODELS = {
   equipamento: {
@@ -26,9 +25,56 @@ export const MODELS = {
     // a versão antiga do cache. Incremente ao substituir o arquivo.
     version: 6, // v6: tres disjuntores grandes com marcador verde/laranja
   },
+
+  // --- catálogo: elementos que o usuário acrescenta à instalação ----------
+  // Estes NÃO usam fitToDimensions: já são gerados em metros reais por
+  // tools/make-elements-glb.mjs. Reescalar seria reintroduzir um erro que a
+  // geração procedural não tem.
+  tomada: {
+    url: "models/tomada.glb",
+    label: "Tomada",
+    icon: "🔌",
+    addable: true,
+    dimensions: { width: 0.09, height: 0.09, depth: 0.018 },
+    fitToDimensions: false,
+    version: 1,
+  },
+  interruptor: {
+    url: "models/interruptor.glb",
+    label: "Interruptor",
+    icon: "💡",
+    addable: true,
+    dimensions: { width: 0.09, height: 0.09, depth: 0.02 },
+    fitToDimensions: false,
+    version: 1,
+  },
+  luminaria: {
+    url: "models/luminaria.glb",
+    label: "Luminária",
+    icon: "🔆",
+    addable: true,
+    dimensions: { width: 0.24, height: 0.18, depth: 0.24 },
+    fitToDimensions: false,
+    version: 1,
+  },
+  eletroduto: {
+    url: "models/eletroduto.glb",
+    label: "Eletroduto",
+    icon: "➖",
+    addable: true,
+    // 1 m de trecho reto; comprimentos maiores saem da escala do elemento.
+    dimensions: { width: 1.0, height: 0.032, depth: 0.032 },
+    fitToDimensions: false,
+    version: 1,
+  },
 };
 
 export const DEFAULT_MODEL_ID = "equipamento";
+
+/** Elementos oferecidos no catálogo, na ordem de declaração. */
+export const CATALOG = Object.entries(MODELS)
+  .filter(([, model]) => model.addable)
+  .map(([id, model]) => ({ id, label: model.label, icon: model.icon }));
 
 export function getModel(id = DEFAULT_MODEL_ID) {
   const model = MODELS[id];

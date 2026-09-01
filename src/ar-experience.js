@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { loadEquipment, createSelectionIndicator, disposeObject } from "./equipment.js";
+import { disposeObject } from "./equipment.js";
 import { GestureController, LIMITS } from "./gestures.js";
 import {
   DEPTH_SENSING_INIT,
@@ -13,21 +13,24 @@ import { createHandProvider } from "./hand/index.js";
 import { HandController, HAND_STATE } from "./hand-controller.js";
 import { HandOcclusion } from "./hand-occlusion.js";
 import { PlacementGuide } from "./placement-guide.js";
-import { ExplodeController } from "./explode.js";
-import { PanelController } from "./panel.js";
+import { ElementScene, spawnPosition } from "./element-scene.js";
 import { FpsMeter } from "./diagnostics.js";
 
 /**
  * Sessão WebXR immersive-ar.
  *
- * Estrutura espacial (inalterada da V1):
+ * Estrutura espacial:
  *   scene
  *     └─ anchorGroup   <- pose da XRAnchor, reescrita a cada frame pelo ARCore
- *          └─ equipment <- posição/rotação/escala definidas pelo usuário
+ *          ├─ quadro    <- posição/rotação/escala definidas pelo usuário
+ *          ├─ tomada
+ *          └─ ...       <- demais elementos da instalação
  *
  * Manter o transform do usuário num filho da âncora é o que permite mover,
  * girar e escalar sem perder a referência espacial: a âncora continua sendo
  * corrigida pelo tracking, e os gestos só alteram o offset local.
+ *
+ * UMA âncora para a planta inteira — ver src/element-scene.js para o porquê.
  */
 export class ARExperience {
   constructor({
@@ -42,8 +45,10 @@ export class ARExperience {
     onHandDetected,
     onScale,
     onPanelAction,
+    onSceneChange,
     onEnd,
   }) {
+    this.modelId = modelId;
     this.model = getModel(modelId);
     this.overlayRoot = overlayRoot;
     this.gestureLayer = gestureLayer;
@@ -55,18 +60,16 @@ export class ARExperience {
     this.onHandDetected = onHandDetected;
     this.onScale = onScale;
     this.onPanelAction = onPanelAction;
+    this.onSceneChange = onSceneChange;
     this.onEnd = onEnd;
-    this.panel = null;
+    this.scene3d = null; // ElementScene; nomeado assim para não colidir com this.scene
     this.lastReportedScale = 1;
     this.handEverDetected = false;
 
     this.session = null;
-    this.equipment = null;
-    this.selectionIndicator = null;
     this.anchor = null;
     this.placementRequested = false;
     this.awaitingPlacement = true;
-    this.selected = false;
     this.hasInteracted = false;
     this.lastFrameTime = 0;
     this.occlusionLive = false;
@@ -75,15 +78,11 @@ export class ARExperience {
     this.handController = null;
     this.cpuOcclusion = null;
     this.handMask = null;
-    this.explode = null;
     this.fps = new FpsMeter();
   }
 
   async start() {
     this.buildScene();
-
-    // Pré-carrega o modelo para que a colocação seja instantânea.
-    const modelPromise = loadEquipment(this.model);
 
     this.session = await navigator.xr.requestSession("immersive-ar", {
       requiredFeatures: ["hit-test", "local"],
@@ -133,16 +132,9 @@ export class ARExperience {
     this.hitTestSource = await this.session.requestHitTestSource({ space: this.viewerSpace });
 
     try {
-      this.equipment = await modelPromise;
-      this.selectionIndicator = createSelectionIndicator(this.equipment);
-      // Ordem importa: o PanelController reparenteia a porta sob um pivô de
-      // dobradiça, e o ExplodeController guarda a posição de repouso de cada
-      // peça na construção. Invertido, a porta explodiria a partir do lugar
-      // errado.
-      this.panel = new PanelController(this.equipment);
-      this.panel.onAction = (message) => this.onPanelAction?.(message);
-      this.explode = new ExplodeController(this.equipment);
-      this.handController?.setTarget(this.equipment);
+      // O equipamento âncora entra já aqui para a colocação ser instantânea.
+      await this.scene3d.add(this.modelId);
+      this.syncHandTargets();
     } catch (error) {
       this.onStatus(`Falha ao carregar ${this.model.url}.`);
       console.error(error);
@@ -217,7 +209,7 @@ export class ARExperience {
       onModeChange: (mode) => this.onGestureMode?.(mode),
       onPointTap: (x, y) => this.handlePointTap(x, y),
     });
-    this.handController.setTarget(this.equipment ?? null);
+    this.syncHandTargets();
   }
 
   /**
@@ -233,7 +225,7 @@ export class ARExperience {
       this.setSelected(true);
       this.gestures?.setTarget(null);
     } else if (state === HAND_STATE.RELEASED || state === HAND_STATE.IDLE) {
-      if (this.selected) this.gestures?.setTarget(this.equipment);
+      if (this.selected) this.gestures?.setTarget(this.selectedElement.root);
     }
   }
 
@@ -276,6 +268,10 @@ export class ARExperience {
     this.anchorGroup = new THREE.Group();
     this.anchorGroup.visible = false;
     this.scene.add(this.anchorGroup);
+
+    this.scene3d = new ElementScene(this.anchorGroup);
+    this.scene3d.onAction = (message) => this.onPanelAction?.(message);
+    this.scene3d.onSelectionChange = () => this.reportScene();
 
     this.raycaster = new THREE.Raycaster();
     this._ndc = new THREE.Vector2();
@@ -326,20 +322,18 @@ export class ARExperience {
       this.requestPlacement();
       return;
     }
-    if (!this.equipment) return;
-
-    const hitObject = this.raycastEquipment(clientX, clientY);
-    if (!hitObject) {
-      if (this.selected) this.setSelected(false);
+    const hit = this.raycastScene(clientX, clientY);
+    if (!hit) {
+      this.setSelected(null);
       return;
     }
 
-    // Com o equipamento JÁ selecionado, um toque numa peça com função
-    // (disjuntor, porta) opera a peça. Antes disso o toque só seleciona — do
+    // Com o elemento JÁ selecionado, um toque numa peça com função (disjuntor,
+    // porta, tecla) opera a peça. Antes disso o toque só seleciona — do
     // contrário seria fácil desligar um circuito sem querer ao mirar no
-    // equipamento pela primeira vez.
-    if (this.selected && this.panel?.handlePick(hitObject)) return;
-    this.setSelected(true);
+    // elemento pela primeira vez.
+    if (hit.element === this.selectedElement && hit.element.panel?.handlePick(hit.object)) return;
+    this.setSelected(hit.element);
   }
 
   /**
@@ -352,39 +346,108 @@ export class ARExperience {
    * e exigir uma pinça antes só tornaria o gesto trabalhoso.
    */
   handlePointTap(clientX, clientY) {
-    if (this.awaitingPlacement || !this.equipment) return;
-    const hitObject = this.raycastEquipment(clientX, clientY);
-    if (!hitObject) return;
-    this.setSelected(true);
-    if (!this.panel?.handlePick(hitObject)) this.onGestureMode?.("point");
+    if (this.awaitingPlacement) return;
+    const hit = this.raycastScene(clientX, clientY);
+    if (!hit) return;
+    this.setSelected(hit.element);
+    if (!hit.element.panel?.handlePick(hit.object)) this.onGestureMode?.("point");
   }
 
-  raycastEquipment(clientX, clientY) {
+  /** @returns {{element, object}|null} peça atingida em QUALQUER elemento */
+  raycastScene(clientX, clientY) {
     const camera = this.getXRCamera();
-    if (!camera) return null;
+    if (!camera || !this.scene3d || this.scene3d.isEmpty) return null;
     const rect = this.gestureLayer.getBoundingClientRect();
     this._ndc.set(
       ((clientX - rect.left) / rect.width) * 2 - 1,
       -((clientY - rect.top) / rect.height) * 2 + 1
     );
     this.raycaster.setFromCamera(this._ndc, camera);
-    // O objeto acertado, não só "acertou algo": a interação por peça precisa
-    // saber QUAL peça.
-    return this.raycaster.intersectObject(this.equipment, true)[0]?.object ?? null;
+    // O objeto atingido, não só "acertou algo": a interação por peça precisa
+    // saber QUAL peça, e a seleção precisa saber de QUAL elemento.
+    return this.scene3d.raycast(this.raycaster);
   }
 
-  setSelected(selected) {
-    if (this.selected === selected) return;
-    this.selected = selected;
-    if (this.selectionIndicator) this.selectionIndicator.visible = selected;
-    this.gestures?.setTarget(selected ? this.equipment : null);
-    if (!selected) this.handController?.release();
+  /** @param {object|null} element elemento da cena, ou null para desselecionar */
+  setSelected(element) {
+    if (this.scene3d?.selected === element) return;
+    this.scene3d?.select(element);
+    this.gestures?.setTarget(element?.root ?? null);
+    if (!element) this.handController?.release();
 
-    if (selected) {
+    if (element) {
       this.markInteracted();
     } else if (this.hasInteracted) {
       this.onStatus("");
     }
+  }
+
+  /** Elemento selecionado agora, se houver. */
+  get selectedElement() {
+    return this.scene3d?.selected ?? null;
+  }
+
+  get selected() {
+    return Boolean(this.scene3d?.selected);
+  }
+
+  /** O equipamento âncora — o primeiro colocado, referência da planta. */
+  get equipment() {
+    return this.scene3d?.anchorElement?.root ?? null;
+  }
+
+  /**
+   * Acrescenta um elemento do catálogo à frente da câmera, já selecionado
+   * para ser arrastado ao lugar. Só depois de a planta ter uma âncora: sem
+   * ponto de referência não há onde pendurar o elemento.
+   */
+  async addElement(modelId) {
+    if (this.awaitingPlacement || !this.scene3d) return null;
+    const camera = this.getXRCamera();
+    if (!camera) return null;
+
+    const element = await this.scene3d.add(
+      modelId,
+      spawnPosition(camera, this.anchorGroup)
+    );
+    this.syncHandTargets();
+    this.setSelected(element);
+    this.onPanelAction?.(`${element.label} adicionada`);
+    this.reportScene();
+    return element;
+  }
+
+  /** Remove o elemento selecionado. A âncora da planta não pode ser removida. */
+  removeSelected() {
+    const element = this.selectedElement;
+    if (!element || element === this.scene3d.anchorElement) return false;
+    const label = element.label;
+    this.scene3d.remove(element);
+    this.syncHandTargets();
+    this.onPanelAction?.(`${label} removida`);
+    this.reportScene();
+    return true;
+  }
+
+  /** A mão pode agarrar qualquer elemento, não só o equipamento âncora. */
+  syncHandTargets() {
+    this.handController?.setTargets(this.scene3d?.roots ?? []);
+  }
+
+  /** Estado da cena para a UI: o que existe e o que está selecionado. */
+  reportScene() {
+    const element = this.selectedElement;
+    this.onSceneChange?.({
+      count: this.scene3d?.elements.length ?? 0,
+      selected: element
+        ? {
+            label: element.label,
+            explodable: element.explode?.explodable ?? false,
+            exploded: element.explode?.exploded ?? false,
+            removable: element !== this.scene3d.anchorElement,
+          }
+        : null,
+    });
   }
 
   markInteracted() {
@@ -404,8 +467,9 @@ export class ARExperience {
     this.anchorGroup.visible = false;
     this.detachAnchor();
     this.placementGuide.reset();
-    this.explode?.reset(); // reposicionar remonta: evita mover peças soltas junto
-    this.panel?.reset(); // e volta o quadro ao estado de fábrica
+    // Reposicionar remonta tudo: evita arrastar peças soltas junto e devolve
+    // os circuitos ao estado de fábrica.
+    this.scene3d?.reset();
     this.onStatus("Aponte para uma superfície e mova o celular devagar");
   }
 
@@ -415,9 +479,10 @@ export class ARExperience {
    * primeiro frame de suavização puxaria o objeto de volta ao valor antigo.
    */
   setScale(scale) {
-    if (!this.equipment) return;
+    const target = this.selectedElement?.root ?? this.equipment;
+    if (!target) return;
     const clamped = THREE.MathUtils.clamp(scale, LIMITS.minScale, LIMITS.maxScale);
-    this.equipment.scale.setScalar(clamped);
+    target.scale.setScalar(clamped);
     this.gestures?.setScale(clamped);
     this.handController?.setScale(clamped);
     this.lastReportedScale = clamped;
@@ -430,8 +495,9 @@ export class ARExperience {
    * o slider precisa acompanhar o gesto — senão exibe um valor mentiroso.
    */
   reportScale() {
-    if (!this.equipment || !this.onScale) return;
-    const scale = this.equipment.scale.x;
+    const target = this.selectedElement?.root ?? this.equipment;
+    if (!target || !this.onScale) return;
+    const scale = target.scale.x;
     if (Math.abs(scale - (this.lastReportedScale ?? -1)) < 0.001) return;
     this.lastReportedScale = scale;
     this.onScale(scale);
@@ -439,11 +505,13 @@ export class ARExperience {
 
   /** Alterna vista montada/explodida. Devolve {explodable, exploded}. */
   toggleExplode() {
-    if (!this.explode?.explodable) return { explodable: false, exploded: false };
+    const element = this.selectedElement ?? this.scene3d?.anchorElement;
+    if (!element?.explode?.explodable) return { explodable: false, exploded: false };
     // Explodir com a porta aberta jogaria a folha de lado: a direção da
     // explosão é local ao pivô da dobradiça, que está girado.
-    this.panel?.closeDoor();
-    const exploded = this.explode.toggle();
+    element.panel?.closeDoor();
+    const exploded = element.explode.toggle();
+    this.reportScene();
     return { explodable: true, exploded };
   }
 
@@ -473,7 +541,8 @@ export class ARExperience {
     if (this.equipment.parent !== this.anchorGroup) this.anchorGroup.add(this.equipment);
 
     this.onStatus(this.hasInteracted ? "" : "Toque no objeto para manipular");
-    this.onPlaced(this.explode?.explodable ?? false);
+    this.onPlaced(this.scene3d.anchorElement?.explode?.explodable ?? false);
+    this.reportScene();
 
     if (this.anchorsSupported) {
       hitResult.createAnchor().then(
@@ -528,8 +597,7 @@ export class ARExperience {
         }
         this.gestures?.update(delta);
         this.updateHand(view, time, delta);
-        this.explode?.update(delta);
-        this.panel?.update(delta);
+        this.scene3d?.update(delta);
         this.reportScale();
       }
 
@@ -638,8 +706,7 @@ export class ARExperience {
     this.handMask = null;
     this.placementGuide?.dispose();
     this.placementGuide = null;
-    this.explode = null;
-    this.panel = null;
+    this.scene3d?.clear();
     this.handProvider?.dispose();
     this.handProvider = null;
 
@@ -647,10 +714,7 @@ export class ARExperience {
     this.hitTestSource = null;
     this.detachAnchor();
 
-    disposeObject(this.equipment);
     disposeObject(this.reticle);
-    this.equipment = null;
-    this.selectionIndicator = null;
 
     this.renderer?.dispose();
     this.renderer?.domElement.remove();
@@ -659,7 +723,6 @@ export class ARExperience {
     this.session = null;
 
     this.awaitingPlacement = true;
-    this.selected = false;
     this.occlusionLive = false;
     this.onEnd();
   }

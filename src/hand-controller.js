@@ -82,6 +82,7 @@ export class HandController {
     this.mode = null;
     this.lastTime = 0;
     this.target = null;
+    this.targets = [];
     this.grab = null;
     this.sample = null;
     this.enabled = true;
@@ -93,6 +94,16 @@ export class HandController {
   setTarget(object) {
     this.target = object;
     this.syncDesired();
+  }
+
+  /**
+   * Todos os elementos que a mão pode agarrar. O alvo efetivo só é escolhido
+   * na hora da pinça, pelo que estiver sob ela — sem isto, só daria para
+   * manipular um elemento da instalação.
+   */
+  setTargets(roots) {
+    this.targets = roots ?? [];
+    if (!this.targets.includes(this.target)) this.setTarget(this.targets[0] ?? null);
   }
 
   syncDesired() {
@@ -192,14 +203,28 @@ export class HandController {
   }
 
   tryGrab(sample) {
-    if (!this.target) return;
+    const candidates = this.targets.length ? this.targets : [this.target].filter(Boolean);
+    if (!candidates.length) return;
     const rect = this.getRect();
     const camera = this.getCamera();
     const x = sample.pinch.x * rect.width + rect.left;
     const y = sample.pinch.y * rect.height + rect.top;
 
-    // Só pega o equipamento se a pinça estiver de fato sobre ele.
-    const grabPoint = this.ray.firstHit(x, y, camera, rect, this.target);
+    // Só pega se a pinça estiver de fato sobre algum elemento — e agarra o
+    // MAIS PRÓXIMO da câmera, não o primeiro da lista, senão pinçar uma tomada
+    // na frente do quadro pegaria o quadro.
+    let grabPoint = null;
+    let nearest = Infinity;
+    for (const candidate of candidates) {
+      const point = this.ray.firstHit(x, y, camera, rect, candidate);
+      if (!point) continue;
+      const distance = point.distanceToSquared(camera.position);
+      if (distance < nearest) {
+        nearest = distance;
+        grabPoint = point;
+        this.target = candidate;
+      }
+    }
     if (!grabPoint) return;
 
     this.syncDesired();
@@ -322,6 +347,7 @@ export class HandController {
   dispose() {
     this.analyzer.reset();
     this.target = null;
+    this.targets = [];
     this.grab = null;
   }
 }

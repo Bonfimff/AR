@@ -1,8 +1,9 @@
 # Modo AR — Prova de Conceito WebXR
 
-POC de realidade aumentada com rastreamento espacial: WebXR `immersive-ar` + hit-test +
-âncora espacial, renderizado com Three.js. Um único objeto 3D, sem backend, sem banco,
-sem login.
+Visualização em realidade aumentada de instalações elétricas: WebXR
+`immersive-ar` + hit-test + âncora espacial, renderizado com Three.js. Quadro
+elétrico com disjuntores acionáveis, mais tomadas, interruptores, luminárias e
+eletrodutos posicionáveis pelo usuário. Sem backend, sem banco, sem login.
 
 ## Estrutura
 
@@ -12,6 +13,7 @@ style.css                      estilos (tela inicial e HUD da AR)
 app.js                         bootstrap, verificação de suporte, ligação da UI
 src/ar-experience.js           AR ENGINE: sessão, hit-test, âncora, seleção, loop
 src/placement-guide.js         orientação de varredura + contorno do plano (plane-detection)
+src/element-scene.js           CENA: vários elementos sob uma âncora comum
 src/explode.js                 vista explodida: separa as peças do equipamento
 src/circuits.js                MODELO ELÉTRICO: energização, manobra, circuitos (dado puro)
 src/panel.js                   ponte modelo elétrico <-> cena: toque na peça, porta, marcadores
@@ -96,10 +98,6 @@ map, e metal muito metálico não tem o que refletir — renderiza quase preto. 
 vale em AR tanto quanto no teste; a primeira versão da luminária saiu como um
 disco preto por causa disso.
 
-> **Ainda não integrados à cena**: os modelos existem e carregam, mas o app
-> continua colocando um único equipamento. Acrescentá-los à cena é o próximo
-> passo.
-
 ## Substituir o modelo
 
 Troque `models/equipamento.glb`. Requisitos do GLB:
@@ -109,9 +107,9 @@ Troque `models/equipamento.glb`. Requisitos do GLB:
 - eixo **Y para cima** e o objeto de pé na orientação desejada;
 - o código centraliza em X/Z e apoia a base em `y = 0` automaticamente.
 
-Para trocar ou acrescentar modelos, edite o registro em `src/models.js`. Adicionar um
-equipamento é uma entrada no objeto `MODELS` mais o GLB em `/models` — não há catálogo
-nem UI de seleção nesta versão, por decisão de escopo.
+Para trocar ou acrescentar modelos, edite o registro em `src/models.js`.
+Acrescentar um elemento é uma entrada no objeto `MODELS` mais o GLB em
+`/models`; marcá-lo com `addable: true` já o faz aparecer no catálogo do HUD.
 
 ## Executar em HTTPS
 
@@ -170,7 +168,12 @@ Abra no celular a URL `https://…` gerada.
 10. Toque fora do objeto para desselecionar. **Reposicionar** recoloca. **Sair da AR** encerra.
 11. **Vista explodida**: toque no botão para ver as peças do gabinete se separarem;
     **Remontar** volta tudo ao lugar. Funciona junto com escala/giro/altura normalmente.
-12. **Interação por peça** (com o equipamento selecionado): toque na **porta**
+12. **+ Adicionar**: abre o catálogo (tomada, interruptor, luminária,
+    eletroduto). O elemento nasce 90 cm à frente da câmera, já selecionado —
+    arraste-o ao lugar. **Remover** apaga o selecionado (o quadro, não: é a
+    referência da planta). Uma tomada recém-colocada fica com o marcador
+    **laranja**, porque ainda não está ligada a circuito nenhum.
+13. **Interação por peça** (com o elemento selecionado): toque na **porta**
     para abri-la, e num dos **três disjuntores** para desligar o circuito — o
     marcador vira laranja e as lâmpadas alimentadas por ele apagam. O geral
     deixa os três laranja. Um aviso curto no rodapé confirma cada manobra.
@@ -381,6 +384,53 @@ de manobra — um circuito apenas desligado não é acusado de desconectado.
 
 Já há `toJSON()`/`fromJSON()` versionados, que serão a base do arquivo que o
 usuário vai baixar. Ainda **não estão ligados a nenhuma UI**.
+
+## A instalação: vários elementos
+
+Depois de posicionar o quadro, o botão **+ Adicionar** abre o catálogo. O
+elemento escolhido nasce a **90 cm à frente da câmera**, já selecionado e
+pronto para ser arrastado ao lugar — colocar na origem empilharia tudo dentro
+do quadro, e colocar no retículo exigiria mirar o chão antes de cada adição.
+
+O catálogo é montado a partir de `CATALOG` em [models.js](src/models.js):
+acrescentar um elemento lá já o faz aparecer na UI, sem tocar em HTML nem CSS.
+
+### Uma âncora para a planta inteira
+
+[element-scene.js](src/element-scene.js) pendura **todos** os elementos numa
+única `XRAnchor`, e não numa âncora por elemento. Duas razões, ambas decisivas:
+
+- as posições **relativas** entre quadro, tomadas e luminárias ficam exatas.
+  Com uma âncora por elemento, cada uma é corrigida pelo tracking de forma
+  independente e a planta se deforma sozinha — inaceitável numa ferramenta
+  cujo produto é justamente onde as coisas ficam umas em relação às outras;
+- salvar/carregar precisa de **um único ponto de referência**. Guardar a planta
+  em coordenadas relativas a uma origem e pedir só essa origem ao recarregar é
+  exatamente o comportamento pretendido.
+
+O custo é que a planta inteira deriva junto se a âncora derivar. É o trade-off
+certo: derivar junto preserva a geometria interna; derivar separado a destrói.
+
+### Seleção e manipulação
+
+Cada elemento tem seu próprio anel de seleção, `PanelController` e
+`ExplodeController`. Os botões **Remover** e **Vista explodida** agem sobre o
+**selecionado**, e aparecem só quando fazem sentido — quem decide isso é uma
+função só (`applySceneState` em [app.js](app.js)), para que "quais botões
+aparecem" tenha uma resposta única e não divirja entre handlers.
+
+O equipamento âncora (o primeiro colocado) não pode ser removido: é a
+referência da planta.
+
+A mão agora escolhe o alvo **na hora da pinça**, pegando o elemento mais
+próximo da câmera — senão pinçar uma tomada à frente do quadro pegaria o quadro.
+
+### Elemento solto não aparece energizado
+
+Cada GLB traz só o próprio esquema, sem fonte. Uma tomada recém-colocada não
+tem alimentação, `isLive` é falso e o marcador fica **laranja**. Isso é
+correto e proposital: ela realmente não está ligada a nada ainda. Associar
+cargas a um disjuntor do quadro é o passo seguinte.
 
 ## Interação por peça
 

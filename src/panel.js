@@ -114,10 +114,16 @@ export class PanelController {
       const element = this.circuit.get(id);
       if (!element) continue;
 
-      // Marcador de disjuntor: recolorido a cada manobra, então precisa de
-      // instância própria tanto quanto uma carga.
-      if (entry.marker) entry.markerMaterial = cloneMaterial(entry.marker);
+      if (entry.marker) {
+        entry.markerMaterial = cloneMaterial(entry.marker);
+        // Com marcador, é ELE que indica o estado; o corpo da peça fica como
+        // está. Escurecer a placa de uma tomada além de apagar o marcador
+        // seria redundante e feio.
+        continue;
+      }
 
+      // Sem marcador, a própria peça acende — é o caso do difusor da luminária
+      // e das lâmpadas de sinalização do quadro. Manobráveis não acendem.
       if (KIND[element.kind].switchable || !entry.object) continue;
       const material = cloneMaterial(entry.object);
       if (!material) continue;
@@ -133,27 +139,29 @@ export class PanelController {
       const element = this.circuit.get(id);
       if (!element) continue;
 
-      if (KIND[element.kind].switchable) {
-        // Alavanca para baixo = desligado. É o feedback do próprio objeto,
-        // não um rótulo na tela.
-        if (entry.lever) {
-          entry.lever.position.y = entry.leverRest - (element.closed ? 0 : LEVER_DROP);
-        }
-        // O marcador segue `isLive`, não `closed`: um disjuntor fechado a
-        // jusante de um geral desligado NÃO está entregando energia, e mostrá-lo
-        // verde seria a mentira mais perigosa que este painel pode contar.
-        if (entry.markerMaterial) {
-          const live = this.circuit.isLive(id);
-          entry.markerMaterial.color.copy(live ? MARKER_ON : MARKER_OFF);
-          entry.markerMaterial.emissive?.copy(live ? MARKER_ON : MARKER_OFF).multiplyScalar(0.45);
-        }
+      // `isLive` e NÃO `closed`/`isEnergized`: um disjuntor fechado a jusante
+      // de um geral desligado não está entregando energia, e uma tomada sem
+      // alimentação não está viva. Mostrar qualquer um deles como verde seria
+      // a mentira mais perigosa que este painel pode contar.
+      const live = this.circuit.isLive(id);
+
+      // Alavanca para baixo = desligado. Feedback do próprio objeto, não um
+      // rótulo na tela. Só existe em peça manobrável.
+      if (entry.lever && KIND[element.kind].switchable) {
+        entry.lever.position.y = entry.leverRest - (element.closed ? 0 : LEVER_DROP);
+      }
+
+      // Marcador: vale para QUALQUER tipo, não só manobrável. Uma tomada não
+      // tem parte móvel que denuncie o estado — é só o marcador que a
+      // distingue de uma tomada energizada.
+      if (entry.markerMaterial) {
+        entry.markerMaterial.color.copy(live ? MARKER_ON : MARKER_OFF);
+        entry.markerMaterial.emissive?.copy(live ? MARKER_ON : MARKER_OFF).multiplyScalar(0.45);
         continue;
       }
 
-      // Carga: acende só se estiver de fato alimentada. `isLive` e não
-      // `isEnergized` — ver a distinção em circuits.js.
+      // Sem marcador, a carga acende sozinha (difusor, lâmpada de sinalização).
       if (!entry.material) continue;
-      const live = this.circuit.isLive(id);
       entry.material.emissive?.copy(live ? entry.baseEmissive : BLACK);
       entry.material.color.copy(entry.baseColor).multiplyScalar(live ? 1 : 0.35);
     }

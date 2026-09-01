@@ -107,6 +107,11 @@ canvas {
 }
 
 .hud-buttons {
+  /* Cola no rodapé SEMPRE. O `space-between` do .hud só distribui quando há
+     dois filhos em fluxo; com a instrução escondida (display:none) e o
+     catálogo em position:absolute, sobra um filho só e ele ia parar no TOPO,
+     cobrindo o painel de diagnóstico. */
+  margin-top: auto;
   display: flex;
   flex-wrap: wrap;
   justify-content: center;
@@ -437,6 +442,64 @@ canvas {
   text-align: right;
   font-variant-numeric: tabular-nums;
   color: #f2f2f2;
+}
+
+/* Catálogo de elementos. Fica acima da fileira de botões e some ao escolher:
+   é um menu momentâneo, não um painel permanente — em AR toda pixel de tela
+   coberta é ambiente que o usuário deixa de ver. */
+.catalog {
+  position: absolute;
+  bottom: calc(env(safe-area-inset-bottom, 16px) + 76px);
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(320px, 88vw);
+  padding: 14px;
+  border-radius: 16px;
+  background: rgba(11, 12, 15, 0.9);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  backdrop-filter: blur(10px);
+  pointer-events: auto;
+}
+
+.catalog[hidden] {
+  display: none;
+}
+
+.catalog-title {
+  font-size: 0.85rem;
+  font-weight: 600;
+  margin-bottom: 10px;
+}
+
+.catalog-items {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.catalog-item {
+  appearance: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  background: rgba(255, 255, 255, 0.06);
+  color: #f2f2f2;
+  font-size: 0.82rem;
+  font-weight: 500;
+  cursor: pointer;
+  text-align: left;
+}
+
+.catalog-item:active {
+  background: rgba(255, 255, 255, 0.18);
+}
+
+.catalog-item span {
+  font-size: 1.1rem;
 }
 
 .btn-tiny {

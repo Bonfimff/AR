@@ -1,5 +1,5 @@
 import { ARExperience } from "./src/ar-experience.js";
-import { DEFAULT_MODEL_ID } from "./src/models.js";
+import { DEFAULT_MODEL_ID, CATALOG } from "./src/models.js";
 import { Diagnostics } from "./src/diagnostics.js";
 import { GestureHud } from "./src/gesture-hud.js";
 
@@ -15,6 +15,11 @@ const ui = {
   diagBtn: document.getElementById("diag-btn"),
   depthBtn: document.getElementById("depth-btn"),
   repositionBtn: document.getElementById("reposition-btn"),
+  addBtn: document.getElementById("add-btn"),
+  removeBtn: document.getElementById("remove-btn"),
+  catalog: document.getElementById("catalog"),
+  catalogItems: document.getElementById("catalog-items"),
+  catalogClose: document.getElementById("catalog-close"),
   explodeBtn: document.getElementById("explode-btn"),
   exitBtn: document.getElementById("exit-ar-btn"),
   gestureBadge: document.getElementById("gesture-badge"),
@@ -46,6 +51,19 @@ let experience = null;
 let depthBadgeTimer = null;
 let diagnostics = null;
 let gestureHud = null;
+
+/**
+ * Reflete o estado da cena nos botões. Uma função só, chamada pelo app a cada
+ * mudança, em vez de cada handler mexer nos botões por conta própria — assim
+ * "quais botões aparecem" tem uma resposta única e não diverge.
+ */
+function applySceneState(state) {
+  const selected = state?.selected ?? null;
+  ui.removeBtn.hidden = !selected?.removable;
+  ui.explodeBtn.hidden = !selected?.explodable;
+  ui.explodeBtn.classList.toggle("is-on", Boolean(selected?.exploded));
+  ui.explodeBtn.textContent = selected?.exploded ? "Remontar" : "Vista explodida";
+}
 
 function showMessage(text) {
   ui.message.hidden = !text;
@@ -105,17 +123,16 @@ async function startAR() {
     onGestureMode: (mode) => gestureHud.showMode(mode),
     onHandDetected: () => gestureHud.maybeShowHandLegend(),
     onPanelAction: (message) => gestureHud.flash(message),
+    onSceneChange: (state) => applySceneState(state),
     onScale: (scale) => {
       // Vem do gesto de pinça de dois dedos; o slider só reflete, não reage.
       ui.scaleRange.value = String(scaleToSlider(scale));
       showScale(scale);
     },
-    onPlaced: (explodable) => {
+    onPlaced: () => {
       ui.repositionBtn.hidden = false;
+      ui.addBtn.hidden = false;
       ui.scaleControl.hidden = false;
-      ui.explodeBtn.hidden = !explodable;
-      ui.explodeBtn.textContent = "Vista explodida";
-      ui.explodeBtn.classList.remove("is-on");
     },
     onEnd: () => {
       experience = null;
@@ -129,6 +146,10 @@ async function startAR() {
       ui.gestureLegend.hidden = true;
       ui.hud.hidden = true;
       ui.repositionBtn.hidden = true;
+      ui.addBtn.hidden = true;
+      ui.addBtn.classList.remove("is-on");
+      ui.removeBtn.hidden = true;
+      ui.catalog.hidden = true;
       ui.explodeBtn.hidden = true;
       ui.explodeBtn.classList.remove("is-on");
       ui.scaleControl.hidden = true;
@@ -141,6 +162,8 @@ async function startAR() {
   ui.startScreen.hidden = true;
   ui.hud.hidden = false;
   ui.repositionBtn.hidden = true;
+  ui.addBtn.hidden = true;
+  ui.removeBtn.hidden = true;
   ui.explodeBtn.hidden = true;
   ui.scaleControl.hidden = true;
   ui.scaleRange.value = String(scaleToSlider(1));
@@ -198,11 +221,9 @@ async function init() {
     experience?.setScale(scale);
   });
 
-  ui.explodeBtn.addEventListener("click", () => {
-    const { exploded } = experience?.toggleExplode() ?? { exploded: false };
-    ui.explodeBtn.classList.toggle("is-on", exploded);
-    ui.explodeBtn.textContent = exploded ? "Remontar" : "Vista explodida";
-  });
+  // Não mexe nos botões aqui: toggleExplode reporta o estado da cena, e
+  // applySceneState é o único lugar que decide como os botões ficam.
+  ui.explodeBtn.addEventListener("click", () => experience?.toggleExplode());
 }
 
 init();

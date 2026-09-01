@@ -583,7 +583,23 @@ export class ARExperience {
   nudge(axis, step) {
     const element = this.selectedElement;
     if (!element) return;
-    element.root.position[axis] += step;
+
+    if (axis === "y") {
+      // A altura é amortecida pelos controladores até um valor desejado próprio.
+      // Sem avisá-los, o frame seguinte devolvia o elemento à altura anterior —
+      // por isso o eixo Y parecia não responder aos botões.
+      const height = THREE.MathUtils.clamp(
+        element.root.position.y + step,
+        LIMITS.minHeight,
+        LIMITS.maxHeight
+      );
+      element.root.position.y = height;
+      this.gestures?.setHeight(height);
+      this.handController?.setHeight(height);
+    } else {
+      element.root.position[axis] += step;
+    }
+
     this.markInteracted();
     this.reportScene();
   }

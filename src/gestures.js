@@ -57,6 +57,16 @@ const HEIGHT_TRAVEL_METERS = 1.5;
 
 const SMOOTHING = 18; // maior = resposta mais direta
 
+// Abaixo disto o objeto já chegou ao valor desejado e o amortecimento para.
+const SETTLED_EPSILON = 1e-4;
+
+// O dom-overlay do Chrome às vezes engole um pointerup (o dedo sai por cima de
+// um botão, o navegador assume o gesto). O ponteiro fantasma que sobra trava o
+// modo — e, como updateHand cede a vez enquanto houver dedo na tela, trava
+// junto o controle por mão. Um ponteiro sem nenhum evento há tanto tempo não
+// existe mais.
+const STALE_POINTER_MS = 2000;
+
 const _worldPosition = new THREE.Vector3();
 const _hitPoint = new THREE.Vector3();
 const _ndc = new THREE.Vector2();
@@ -82,15 +92,18 @@ export class GestureController {
 
     // Valores desejados; o update() aproxima o objeto deles suavemente.
     this.desired = { scale: 1, rotationY: 0, height: 0 };
+    this.settling = false; // há um valor desejado ainda não alcançado
 
     this._down = this.onPointerDown.bind(this);
     this._move = this.onPointerMove.bind(this);
     this._up = this.onPointerUp.bind(this);
+    this._lost = this.onPointerLost.bind(this);
 
     element.addEventListener("pointerdown", this._down);
     element.addEventListener("pointermove", this._move);
     element.addEventListener("pointerup", this._up);
-    element.addEventListener("pointercancel", this._up);
+    element.addEventListener("pointercancel", this._lost);
+    element.addEventListener("lostpointercapture", this._lost);
   }
 
   /** Define o objeto manipulável (null = nada selecionado). */
@@ -99,33 +112,59 @@ export class GestureController {
     this.pointers.clear();
     this.mode = null;
     this.subMode = null;
-    if (object) {
-      this.desired.scale = object.scale.x;
-      this.desired.rotationY = object.rotation.y;
-      this.desired.height = object.position.y;
-    }
+    this.settling = false;
+    this.syncDesired();
+  }
+
+  /** Alinha os valores desejados ao transform atual do objeto. */
+  syncDesired() {
+    const object = this.target;
+    if (!object) return;
+    this.desired.scale = object.scale.x;
+    this.desired.rotationY = object.rotation.y;
+    this.desired.height = object.position.y;
   }
 
   /** Escala vinda do controle na tela (ver ARExperience.setScale). */
   setScale(scale) {
     this.desired.scale = scale;
+    this.settling = true;
     if (this.start) this.start.scale = scale;
+  }
+
+  /** Altura vinda dos botões de posição (ver ARExperience.nudge). */
+  setHeight(height) {
+    this.desired.height = height;
+    this.settling = true;
+    if (this.start) this.start.height = height;
   }
 
   dispose() {
     this.element.removeEventListener("pointerdown", this._down);
     this.element.removeEventListener("pointermove", this._move);
     this.element.removeEventListener("pointerup", this._up);
-    this.element.removeEventListener("pointercancel", this._up);
+    this.element.removeEventListener("pointercancel", this._lost);
+    this.element.removeEventListener("lostpointercapture", this._lost);
     this.pointers.clear();
     this.target = null;
   }
 
   /** Chamado a cada frame: suaviza escala, rotação e altura. */
   update(delta) {
-    if (!this.target) return;
-    const t = 1 - Math.exp(-SMOOTHING * delta);
     const object = this.target;
+    if (!object) return;
+
+    // Sem gesto em curso e sem nada a alcançar, este controlador NÃO escreve no
+    // objeto. Escala, altura e giro também vêm dos botões da tela e da mão; se
+    // amortecêssemos sempre, cada frame puxaria o objeto de volta ao último
+    // valor que ESTE controlador conhecia — era isso que anulava o ajuste de
+    // altura assim que o botão era solto.
+    if (!this.mode && !this.settling) {
+      this.syncDesired();
+      return;
+    }
+
+    const t = 1 - Math.exp(-SMOOTHING * delta);
 
     // O clamp é reaplicado aqui para que os limites valham para o estado final
     // do objeto, e não apenas para o ponto em que o gesto os calculou.
@@ -142,16 +181,27 @@ export class GestureController {
       LIMITS.minHeight,
       LIMITS.maxHeight
     );
+
+    if (!this.mode && this.isSettled(object)) this.settling = false;
+  }
+
+  isSettled(object) {
+    return (
+      Math.abs(object.scale.x - this.desired.scale) < SETTLED_EPSILON &&
+      Math.abs(object.rotation.y - this.desired.rotationY) < SETTLED_EPSILON &&
+      Math.abs(object.position.y - this.desired.height) < SETTLED_EPSILON
+    );
   }
 
   // ---- ponteiros ----
 
   onPointerDown(event) {
+    this.prunePointers();
     capture(this.element, event.pointerId, true);
     this.pointers.set(event.pointerId, readPoint(event));
 
     if (this.pointers.size === 1) {
-      this.tapCandidate = { time: performance.now(), ...readPoint(event) };
+      this.tapCandidate = readPoint(event);
       if (this.target) this.beginDrag(event.clientX, event.clientY);
     } else if (this.pointers.size === 2 && this.target) {
       this.tapCandidate = null;
@@ -186,6 +236,22 @@ export class GestureController {
       this.onTap?.(tap.x, tap.y);
     }
 
+    this.afterPointerRemoved();
+  }
+
+  /**
+   * Ponteiro perdido sem pointerup: cancelamento do navegador ou fim da captura.
+   * Não vira toque — só encerra o que estava em curso, para que um dedo
+   * fantasma nunca deixe o gesto travado no modo anterior.
+   */
+  onPointerLost(event) {
+    if (!this.pointers.has(event.pointerId)) return;
+    this.pointers.delete(event.pointerId);
+    this.tapCandidate = null;
+    this.afterPointerRemoved();
+  }
+
+  afterPointerRemoved() {
     if (this.pointers.size === 0) {
       this.mode = null;
       this.subMode = null;
@@ -198,6 +264,20 @@ export class GestureController {
       const [remaining] = this.pointers.values();
       this.beginDrag(remaining.x, remaining.y);
     }
+  }
+
+  /** Descarta ponteiros que pararam de dar sinal (ver STALE_POINTER_MS). */
+  prunePointers() {
+    if (!this.pointers.size) return;
+    const now = performance.now();
+    let removed = false;
+    for (const [id, point] of this.pointers) {
+      if (now - point.time <= STALE_POINTER_MS) continue;
+      capture(this.element, id, false);
+      this.pointers.delete(id);
+      removed = true;
+    }
+    if (removed) this.afterPointerRemoved();
   }
 
   // ---- um dedo: mover sobre o plano horizontal ----
@@ -234,7 +314,7 @@ export class GestureController {
     }
 
     const hit = this.rayToPlane(clientX, clientY);
-    if (!hit) return;
+    if (!hit || !this.target.parent) return; // elemento removido no meio do arrasto
 
     if (!this._dragAnnounced) {
       this._dragAnnounced = true;
@@ -310,6 +390,7 @@ export class GestureController {
         LIMITS.maxHeight
       );
     }
+    this.settling = true;
     this.onChange?.();
   }
 
@@ -387,7 +468,8 @@ function capture(element, pointerId, on) {
   }
 }
 
-const readPoint = (event) => ({ x: event.clientX, y: event.clientY });
+// `time` serve à detecção de toque curto e ao descarte de ponteiro fantasma.
+const readPoint = (event) => ({ x: event.clientX, y: event.clientY, time: performance.now() });
 const distance = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
 const angleOf = (a, b) => Math.atan2(b.y - a.y, b.x - a.x);
 const shortestAngle = (radians) => Math.atan2(Math.sin(radians), Math.cos(radians));

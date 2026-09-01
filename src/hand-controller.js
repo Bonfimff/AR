@@ -144,6 +144,12 @@ export class HandController {
     if (this.grab) this.grab.scale = scale;
   }
 
+  /** Altura definida pelos botões de posição — mesma razão que setScale. */
+  setHeight(height) {
+    this.desired.height = height;
+    if (this.grab) this.grab.height = height;
+  }
+
   /**
    * @param {Array|null} points landmarks em [0..1], ou null se não há mão
    * @param {number} time segundos

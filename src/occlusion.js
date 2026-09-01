@@ -47,6 +47,18 @@ export function isOcclusionLive(renderer, cpuOcclusion) {
 // ruído do sensor, não como um objeto real — ver despeckle() abaixo.
 const OUTLIER_METERS = 0.25;
 
+// Erosão: quantos texels a "casca" de cada região próxima perde. O ruído do
+// depth-from-motion aparece em manchas pequenas; um oclusor de verdade (mão,
+// pessoa) é grande e só perde a borda. Duas passadas matam manchas de até ~4
+// texels sem comer visivelmente um oclusor real.
+const ERODE_PASSES = 2;
+
+// Margem antes de ocluir: a superfície real precisa estar ao menos isto mais
+// PERTO que o pixel virtual. Absorve o erro de medida junto às superfícies, que
+// é onde ele mais aparece — sem isso o equipamento se recorta contra o próprio
+// chão em que está apoiado.
+const OCCLUSION_BIAS_METERS = 0.06;
+
 /**
  * Oclusão para o modo cpu-optimized.
  *
@@ -61,11 +73,14 @@ export class CpuDepthOcclusion {
    * @param {object} [options]
    * @param {number} [options.orientation] 0..3, ver ORIENTATIONS.
    */
-  constructor({ orientation = 1 } = {}) {
+  constructor({ orientation = 1, enabled = true } = {}) {
+    this.enabled = enabled;
     this.active = false;
     this.texture = null;
     this.meters = null;
     this.raw = null;
+    this.previous = null; // frame anterior, para a concordância temporal
+    this.scratch = null;
 
     this.uniforms = {
       depthTexture: { value: null },
@@ -75,6 +90,7 @@ export class CpuDepthOcclusion {
       viewport: { value: new THREE.Vector4(0, 0, 1, 1) },
       projection: { value: new THREE.Matrix4() },
       debug: { value: 0 },
+      bias: { value: OCCLUSION_BIAS_METERS },
       // x: inverte o Y ANTES da matriz; y: inverte o Y DEPOIS dela.
       flip: { value: new THREE.Vector2() },
     };
@@ -104,10 +120,23 @@ export class CpuDepthOcclusion {
   }
 
   /** @param {XRFrame} frame @param {XRView} view @param {THREE.Camera} camera */
+  /**
+   * Liga/desliga o passe. Desligado não é só invisível: nem decodifica nem
+   * filtra o mapa, o que devolve o orçamento de CPU por frame.
+   */
+  setEnabled(enabled) {
+    this.enabled = enabled;
+    if (!enabled) {
+      this.mesh.visible = false;
+      this.active = false;
+      this.previous = null; // não guardar um frame velho para comparar ao religar
+    }
+  }
+
   update(frame, view, camera, renderer) {
     this.active = false;
     this.mesh.visible = false;
-    if (!frame || !view || !camera) return;
+    if (!this.enabled || !frame || !view || !camera) return;
 
     const info = frame.getDepthInformation?.(view);
     if (!info || !info.data) return;
@@ -188,50 +217,67 @@ export class CpuDepthOcclusion {
       const src = new Float32Array(info.data);
       for (let i = 0; i < count; i += 1) this.raw[i] = src[i] * scale;
     }
-    this.despeckle();
+    this.stabilize();
     this.texture.needsUpdate = true;
   }
 
   /**
-   * Remove picos isolados de 1 texel antes de escrever a profundidade.
+   * Limpa o mapa antes de escrever a profundidade. Duas etapas, contra dois
+   * modos de falha diferentes do depth-from-motion do ARCore:
    *
-   * O depth-from-motion do ARCore é ruidoso perto de descontinuidades — bordas
-   * de objetos, o encontro com o chão — e ocasionalmente devolve um texel bem
-   * mais PERTO que toda a vizinhança, sem nada ali de verdade. Isso fazia o
-   * equipamento aparecer "furado" na base mesmo sem mão nem objeto na frente
-   * (visto em captura de tela do aparelho: corte serrilhado exatamente onde a
-   * grade de ventilação encontra o chão, com HAND MASK e HAND ambos OFF).
+   * 1. CONCORDÂNCIA TEMPORAL — uma medida só vale se o mesmo texel já estava
+   *    perto no frame anterior. O ruído pisca; mão e pessoa persistem. É o que
+   *    mata as manchas grandes que apareciam no meio do equipamento, com nada
+   *    na frente, e que a rejeição de pico isolado não pegava por serem bem
+   *    maiores que um texel.
    *
-   * Um texel isolado mais perto que os 4 vizinhos por mais de OUTLIER_METERS
-   * é rejeitado (tratado como "sem medida", igual a um buraco do sensor) em
-   * vez de usado. Um texel mais LONGE que a vizinhança não é filtrado: na
-   * pior hipótese o equipamento aparece na frente de algo que devia escondê-lo,
-   * o mesmo tipo de falha segura que a filial "meters <= 0" no shader já cobre.
-   * Deliberadamente O(1) por texel (sem alocar, sem ordenar) para não pesar
-   * mais no orçamento de CPU por frame.
+   * 2. EROSÃO — cada região próxima perde ERODE_PASSES texels de casca. O que
+   *    sobra do ruído desaparece; um oclusor real só encolhe na borda.
+   *
+   * As duas erram para o mesmo lado: na dúvida, NÃO ocluir. O pior caso é o
+   * equipamento aparecer na frente de algo que devia escondê-lo — incômodo, mas
+   * honesto. Recortar o equipamento sem nada na frente destrói a ilusão inteira.
+   *
+   * Custo: O(1) por texel por passada, sem alocação no laço.
    */
-  despeckle() {
+  stabilize() {
     const { raw, meters, width, height } = this;
-    for (let y = 0; y < height; y += 1) {
-      const row = y * width;
-      for (let x = 0; x < width; x += 1) {
-        const i = row + x;
-        const value = raw[i];
-        if (value <= 0 || x === 0 || y === 0 || x === width - 1 || y === height - 1) {
-          meters[i] = value;
-          continue;
+    const count = width * height;
+
+    if (!this.previous || this.previous.length !== count) {
+      this.previous = new Float32Array(count);
+      this.scratch = new Float32Array(count);
+    }
+
+    // 1. concordância com o frame anterior: fica o MAIS LONGE dos dois, e um
+    // texel sem medida antes não ocluí agora (só na próxima confirmação).
+    const previous = this.previous;
+    for (let i = 0; i < count; i += 1) {
+      const now = raw[i];
+      const before = previous[i];
+      meters[i] = now > 0 && before > 0 ? Math.max(now, before) : 0;
+      previous[i] = now;
+    }
+
+    // 2. erosão: cada texel recebe a MAIOR profundidade da vizinhança-cruz
+    // (0 = sem medida conta como "longe", então buracos também comem borda).
+    const scratch = this.scratch;
+    for (let pass = 0; pass < ERODE_PASSES; pass += 1) {
+      scratch.set(meters);
+      for (let y = 1; y < height - 1; y += 1) {
+        const row = y * width;
+        for (let x = 1; x < width - 1; x += 1) {
+          const i = row + x;
+          if (scratch[i] <= 0) continue;
+          const l = scratch[i - 1];
+          const r = scratch[i + 1];
+          const u = scratch[i - width];
+          const d = scratch[i + width];
+          meters[i] =
+            l <= 0 || r <= 0 || u <= 0 || d <= 0
+              ? 0
+              : Math.max(scratch[i], l, r, u, d);
         }
-        const left = raw[i - 1];
-        const right = raw[i + 1];
-        const up = raw[i - width];
-        const down = raw[i + width];
-        let neighborMin = Infinity;
-        if (left > 0) neighborMin = Math.min(neighborMin, left);
-        if (right > 0) neighborMin = Math.min(neighborMin, right);
-        if (up > 0) neighborMin = Math.min(neighborMin, up);
-        if (down > 0) neighborMin = Math.min(neighborMin, down);
-        meters[i] =
-          Number.isFinite(neighborMin) && value < neighborMin - OUTLIER_METERS ? 0 : value;
       }
     }
   }
@@ -244,6 +290,8 @@ export class CpuDepthOcclusion {
     this.texture = null;
     this.meters = null;
     this.raw = null;
+    this.previous = null;
+    this.scratch = null;
     this.active = false;
   }
 }
@@ -266,6 +314,7 @@ uniform mat4 uvTransform;
 uniform mat4 projection;
 uniform vec4 viewport;
 uniform float debug;
+uniform float bias;
 uniform vec2 flip;
 out vec4 fragColor;
 
@@ -291,7 +340,9 @@ void main() {
   }
 
   // Metros -> profundidade em NDC, usando a mesma projeção da câmera da AR.
-  float viewZ = -meters;
+  // O bias empurra o oclusor para TRÁS: a superfície real precisa estar
+  // claramente mais perto para recortar o virtual.
+  float viewZ = -(meters + bias);
   float clipZ = projection[2][2] * viewZ + projection[3][2];
   float clipW = -viewZ;
   gl_FragDepth = clamp(clipZ / clipW * 0.5 + 0.5, 0.0, 1.0);

@@ -202,6 +202,20 @@ Gestos (com o objeto colocado, mão diante da câmera):
 - **👉 apontar o indicador** — "toca" na peça mirada: abre a porta, liga/desliga
   o disjuntor.
 
+### Porta aberta trava a manipulação
+
+Com a porta de um elemento aberta, **mover, girar, altura e a pinça de escala
+ficam desligados**. Continuam valendo apenas acionar disjuntor e fechar a porta.
+
+O motivo é reduzir erro de interpretação justamente onde ele custa mais: com a
+porta aberta o usuário mira alvos pequenos dentro do gabinete, e qualquer
+arrasto acidental tira o alvo de baixo do dedo. Menos gestos possíveis, menos
+chance de confundir um com o outro.
+
+Toque e gesto de apontar não passam por esse travamento — é exatamente o que se
+quer preservar. `applyInputTargets()` só reaplica quando algo muda de verdade:
+chamar `setTarget` a cada frame zeraria qualquer arrasto em curso.
+
 ### 👉 Apontar como gesto de toque
 
 O indicador esticado com médio, anelar e mínimo recolhidos. Medido pela razão
@@ -395,6 +409,17 @@ do quadro, e colocar no retículo exigiria mirar o chão antes de cada adição.
 O catálogo é montado a partir de `CATALOG` em [models.js](src/models.js):
 acrescentar um elemento lá já o faz aparecer na UI, sem tocar em HTML nem CSS.
 
+A ligação da interface (`wireUi()` em [app.js](app.js)) roda **antes** da
+checagem de suporte a WebXR, e de propósito: nada nela depende de AR, e deixá-la
+atrás do `return` de "aparelho não suportado" já custou um bug — os botões do
+catálogo apareciam na tela sem ninguém escutando o clique. Também é o que torna
+a UI testável num navegador comum.
+
+Catálogo e aviso de gesto ficam **no fluxo** da pilha do rodapé, não
+posicionados por deslocamento fixo: o deslocamento certo dependeria de quais
+controles estão visíveis no momento, e a primeira versão encavalava na barra de
+escala.
+
 ### Uma âncora para a planta inteira
 
 [element-scene.js](src/element-scene.js) pendura **todos** os elementos numa
@@ -529,6 +554,36 @@ Perderia: abrir por link sem instalar, e praticamente todo o código atual
 **Decisão atual: seguir em WebXR.** A vantagem real só importa depois que
 salvar/carregar existir e for usado de verdade — decidir agora seria pagar a
 reescrita antes de saber se ela é necessária.
+
+## Oclusão: por que a profundidade fica DESLIGADA por padrão
+
+O depth-from-motion do S20 FE recortava o equipamento em manchas com **nada na
+frente** — visto em captura no aparelho. Um recorte falso destrói a ilusão
+inteira; a máscara da mão é geométrica e, por construção, nunca recorta onde
+não há mão.
+
+Então: **com máscara de mão disponível, a oclusão por profundidade não entra**.
+Sem máscara ela continua ligada — aí é a única oclusão que existe, e uma ruim é
+melhor que nenhuma. `?depth=1` força ligada para comparar, `?depth=0` força
+desligada.
+
+O filtro do mapa também ficou mais duro (`stabilize()` em
+[occlusion.js](src/occlusion.js)), em duas etapas contra dois modos de falha:
+
+1. **concordância temporal** — uma medida só vale se o mesmo texel já estava
+   perto no frame anterior. O ruído pisca; mão e pessoa persistem. É o que pega
+   as manchas grandes, que a rejeição de pico isolado não via por serem bem
+   maiores que um texel;
+2. **erosão** — cada região próxima perde 2 texels de casca. O resto do ruído
+   some; um oclusor real só encolhe na borda.
+
+Mais uma margem de 6 cm antes de ocluir (`OCCLUSION_BIAS_METERS`), que absorve
+o erro junto às superfícies — é ali que ele mais aparece, e sem ela o
+equipamento se recortava contra o próprio chão em que está apoiado.
+
+As três erram para o mesmo lado: **na dúvida, não ocluir**. O pior caso passa a
+ser o equipamento aparecer na frente de algo que devia escondê-lo — incômodo,
+mas honesto.
 
 ## As duas camadas de oclusão
 

@@ -65,6 +65,7 @@ export class ARExperience {
     this.scene3d = null; // ElementScene; nomeado assim para não colidir com this.scene
     this.lastReportedScale = 1;
     this.handEverDetected = false;
+    this._inputKey = null; // chave de "alvo de entrada atual": ver applyInputTargets
 
     this.session = null;
     this.anchor = null;
@@ -143,8 +144,25 @@ export class ARExperience {
     this.setupInput();
     await this.setupHandTracking();
 
+    // A OCLUSÃO POR PROFUNDIDADE NÃO ENTRA POR PADRÃO quando há máscara de mão.
+    //
+    // O depth-from-motion do S20 FE recortava o equipamento em manchas com
+    // NADA na frente (visto em captura no aparelho). O filtro temporal + erosão
+    // em occlusion.js reduz isso, mas não posso prometer que elimina — e um
+    // recorte falso destrói a ilusão inteira, enquanto a máscara da mão é
+    // geométrica e por construção nunca recorta onde não há mão.
+    //
+    // Sem máscara de mão a profundidade continua ligada: aí ela é a única
+    // oclusão que existe, e uma ruim é melhor que nenhuma.
+    // ?depth=1 força ligada para comparar; ?depth=0 força desligada.
+    const depthParam = new URLSearchParams(location.search).get("depth");
+    this.depthOcclusionOn =
+      depthParam === "1" ? true : depthParam === "0" ? false : !this.handMask;
+    this.cpuOcclusion?.setEnabled(this.depthOcclusionOn);
+
     // Reportado só agora para que o aviso já saiba se há máscara de mão.
     this.depthStatus.mask = Boolean(this.handMask);
+    this.depthStatus.depthOn = this.depthOcclusionOn;
     this.onDepthStatus?.(this.depthStatus);
     this.onStatus("Aponte para uma superfície e mova o celular devagar");
     this.renderer.setAnimationLoop((time, frame) => this.render(time, frame));
@@ -372,13 +390,44 @@ export class ARExperience {
   setSelected(element) {
     if (this.scene3d?.selected === element) return;
     this.scene3d?.select(element);
-    this.gestures?.setTarget(element?.root ?? null);
+    this.applyInputTargets();
     if (!element) this.handController?.release();
 
     if (element) {
       this.markInteracted();
     } else if (this.hasInteracted) {
       this.onStatus("");
+    }
+  }
+
+  /**
+   * COM A PORTA ABERTA, mover/girar/altura/escala ficam desligados. Só
+   * continuam valendo acionar disjuntor e fechar a porta.
+   *
+   * O motivo é reduzir erro de interpretação justamente quando ele custa mais:
+   * com a porta aberta o usuário está mirando alvos pequenos dentro do
+   * gabinete, e qualquer arrasto acidental tira o alvo de baixo do dedo. Menos
+   * gestos possíveis, menos chance de confundir um com o outro.
+   *
+   * Toque e gesto de apontar NÃO passam por aqui — continuam funcionando, que
+   * é exatamente o que se quer preservar.
+   */
+  applyInputTargets() {
+    const element = this.selectedElement;
+    const locked = Boolean(element?.panel?.doorOpen);
+
+    // setTarget/setTargets zeram o estado de arrasto, então só chamamos quando
+    // algo realmente mudou — a cada frame quebraria qualquer gesto em curso.
+    const key = `${locked}|${element?.id ?? ""}`;
+    if (key === this._inputKey) return;
+    this._inputKey = key;
+
+    this.gestures?.setTarget(locked ? null : (element?.root ?? null));
+    this.handController?.setTargets(locked ? [] : (this.scene3d?.roots ?? []));
+
+    if (locked) {
+      this.handController?.release();
+      this.onPanelAction?.("Porta aberta — mover e girar travados");
     }
   }
 
@@ -431,7 +480,8 @@ export class ARExperience {
 
   /** A mão pode agarrar qualquer elemento, não só o equipamento âncora. */
   syncHandTargets() {
-    this.handController?.setTargets(this.scene3d?.roots ?? []);
+    this._inputKey = null; // a lista mudou: força reaplicar
+    this.applyInputTargets();
   }
 
   /** Estado da cena para a UI: o que existe e o que está selecionado. */
@@ -598,6 +648,7 @@ export class ARExperience {
         this.gestures?.update(delta);
         this.updateHand(view, time, delta);
         this.scene3d?.update(delta);
+        this.applyInputTargets(); // a porta pode ter acabado de abrir/fechar
         this.reportScale();
       }
 

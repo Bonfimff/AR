@@ -32,6 +32,16 @@ canvas {
   padding: 24px;
 }
 
+/* `display:flex` de uma regra de autor VENCE o `[hidden] { display: none }`
+   do navegador, então sem isto `elemento.hidden = true` não escondia nada:
+   a tela inicial e o HUD ficavam visíveis mesmo "escondidos". Não aparecia no
+   aparelho porque, em AR, o dom-overlay compõe apenas #ar-hud — mas ao SAIR da
+   sessão o HUD continuava flutuando sobre a tela inicial. */
+.overlay[hidden],
+.hud[hidden] {
+  display: none;
+}
+
 .panel {
   max-width: 420px;
   width: 100%;
@@ -91,8 +101,13 @@ canvas {
   justify-content: space-between;
   align-items: center;
   pointer-events: none;
-  padding: env(safe-area-inset-top, 16px) env(safe-area-inset-right, 16px)
-    env(safe-area-inset-bottom, 16px) env(safe-area-inset-left, 16px);
+  /* max() e não só o fallback do env(): no Chrome/Android em AR o
+     safe-area-inset-top costuma vir 0 — valor válido, então o fallback NÃO
+     entra — e a barra de status do sistema passa a cobrir o topo do HUD. */
+  padding: max(env(safe-area-inset-top, 0px), 30px)
+    max(env(safe-area-inset-right, 0px), 12px)
+    max(env(safe-area-inset-bottom, 0px), 14px)
+    max(env(safe-area-inset-left, 0px), 12px);
 }
 
 .instructions {
@@ -106,18 +121,36 @@ canvas {
   text-align: center;
 }
 
-.hud-buttons {
-  /* Cola no rodapé SEMPRE. O `space-between` do .hud só distribui quando há
-     dois filhos em fluxo; com a instrução escondida (display:none) e o
-     catálogo em position:absolute, sobra um filho só e ele ia parar no TOPO,
-     cobrindo o painel de diagnóstico. */
+/* Pilha de controles colada no rodapé. O `space-between` do .hud só distribui
+   quando há dois filhos em fluxo; com a instrução escondida (display:none) e o
+   catálogo em position:absolute sobrava um filho só, e ele ia parar no TOPO,
+   cobrindo o painel de diagnóstico. */
+.hud-bottom {
   margin-top: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+}
+
+.hud-buttons {
   display: flex;
   flex-wrap: wrap;
   justify-content: center;
-  gap: 12px;
-  margin-bottom: 16px;
+  align-items: center;
+  gap: 8px;
   pointer-events: auto;
+}
+
+/* Linha de sessão: menos destaque que as ações do elemento. */
+.hud-buttons-session {
+  opacity: 0.92;
+}
+
+/* Sem nenhuma ação visível a linha some, em vez de deixar um vão. */
+.hud-buttons:empty {
+  display: none;
 }
 
 .btn-secondary {
@@ -126,11 +159,12 @@ canvas {
   background: rgba(11, 12, 15, 0.6);
   backdrop-filter: blur(6px);
   color: #f2f2f2;
-  font-size: 0.9rem;
+  font-size: 0.85rem;
   font-weight: 500;
-  padding: 12px 20px;
+  padding: 10px 16px;
   border-radius: 999px;
   cursor: pointer;
+  white-space: nowrap;
 }
 
 .btn-secondary:active {
@@ -212,8 +246,9 @@ canvas {
 
 .btn-icon {
   appearance: none;
-  width: 44px;
-  height: 44px;
+  width: 40px;
+  height: 40px;
+  flex: 0 0 auto;
   border-radius: 999px;
   border: 1px solid rgba(255, 255, 255, 0.3);
   background: rgba(11, 12, 15, 0.6);
@@ -230,12 +265,10 @@ canvas {
   border-color: rgba(0, 224, 164, 0.55);
 }
 
-/* Indicador discreto do gesto ativo (mão ou toque) */
+/* Indicador discreto do gesto ativo (mão ou toque). No fluxo da pilha do
+   rodapé, não posicionado por deslocamento fixo: assim nunca colide com o
+   catálogo nem com a barra de escala, apareçam eles ou não. */
 .gesture-badge {
-  position: absolute;
-  bottom: calc(env(safe-area-inset-bottom, 16px) + 76px);
-  left: 50%;
-  transform: translateX(-50%);
   padding: 6px 14px;
   border-radius: 999px;
   background: rgba(11, 12, 15, 0.6);
@@ -382,8 +415,7 @@ canvas {
   display: flex;
   align-items: center;
   gap: 10px;
-  margin-bottom: 12px;
-  padding: 8px 16px;
+  padding: 7px 14px;
   border-radius: 999px;
   background: rgba(11, 12, 15, 0.6);
   backdrop-filter: blur(6px);
@@ -444,14 +476,10 @@ canvas {
   color: #f2f2f2;
 }
 
-/* Catálogo de elementos. Fica acima da fileira de botões e some ao escolher:
-   é um menu momentâneo, não um painel permanente — em AR toda pixel de tela
-   coberta é ambiente que o usuário deixa de ver. */
+/* Catálogo de elementos. Some ao escolher: é um menu momentâneo, não um painel
+   permanente — em AR cada pixel de tela coberta é ambiente que o usuário deixa
+   de ver. */
 .catalog {
-  position: absolute;
-  bottom: calc(env(safe-area-inset-bottom, 16px) + 76px);
-  left: 50%;
-  transform: translateX(-50%);
   width: min(320px, 88vw);
   padding: 14px;
   border-radius: 16px;

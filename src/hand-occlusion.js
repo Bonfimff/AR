@@ -32,6 +32,23 @@ const PALM_METERS = 0.095;
 const BONE_METERS = 0.026;
 const PALM_PADDING = 1.25;
 
+// A mão NÃO tem espessura uniforme, e desenhá-la assim é o que deixava a
+// silhueta com cara de boneco de palito: a palma saía fina demais (aparecia
+// fundo entre os ossos que a atravessam) e as pontas dos dedos, gordas demais.
+// Multiplicador por osso, relativo a BONE_METERS:
+const THUMB = 1.15; // o polegar é mais grosso que os outros dedos
+const TIP = 0.72; // falange distal: afina para a ponta
+const MID = 0.88;
+const PALM_BONE = 2.1; // ossos que cruzam a palma: preenchem a mão, não um dedo
+const BONE_SCALE = [
+  THUMB, THUMB, THUMB * 0.9, THUMB * TIP, // polegar
+  1.0, 1.0, MID, TIP, // indicador
+  1.0, MID, TIP, // médio
+  0.95, MID * 0.95, TIP * 0.95, // anelar
+  0.95, 0.9, MID * 0.9, TIP * 0.9, // mínimo
+  PALM_BONE, PALM_BONE, PALM_BONE, // travessas da palma
+];
+
 const MIN_DISTANCE = 0.12;
 const MAX_DISTANCE = 1.5;
 
@@ -45,18 +62,43 @@ const BONES = [
   [0, 17], [17, 18], [18, 19], [19, 20],
   [5, 9], [9, 13], [13, 17],
 ];
-const PALM = [0, L.indexMcp, L.middleMcp, L.ringMcp, L.pinkyMcp];
+// O nó do polegar entra no leque: sem ele, a silhueta entalhava o músculo da
+// base do polegar (a região carnuda entre polegar e indicador) e o equipamento
+// reaparecia bem no meio da mão.
+const PALM = [0, L.thumbMcp, L.indexMcp, L.middleMcp, L.ringMcp, L.pinkyMcp];
+
+// A mão não termina no landmark do punho: o pulso continua. Sem esta faixa a
+// silhueta afinava até um bico e o equipamento voltava a aparecer sobre o
+// pulso. Fração do vão punho -> nó do dedo médio.
+const WRIST_EXTENSION = 0.6;
 
 // Onde dois ossos se encontram a direção muda, e um retângulo por osso deixa
 // uma aresta viva na junta — visível de perto como um contorno poligonal em
 // vez de um dedo. Um hexágono em cada junta arredonda essa transição; barato
 // o bastante (6 triângulos) para cobrir todas de uma vez.
-const CAP_SEGMENTS = 6;
+// Só as falanges distais passam da ponta; as demais emendam na próxima.
+const TIP_OVERSHOOT = Object.fromEntries(
+  BONES.map(([, b], i) => [i, [L.thumbTip, L.indexTip, L.middleTip, L.ringTip, L.pinkyTip].includes(b) ? 1.0 : 0])
+);
+
+// Hexágono era pouco: de perto a junta lia como um parafuso sextavado no meio
+// do dedo. Doze segmentos custam 12 triângulos por junta e somem como curva.
+const CAP_SEGMENTS = 12;
 const JOINTS = [...new Set(BONES.flat())];
+
+// Raio do disco de cada junta: o MAIOR entre os ossos que a tocam, para o
+// disco nunca ficar mais fino que o dedo que chega nele.
+const JOINT_SCALE = {};
+for (let i = 0; i < BONES.length; i += 1) {
+  for (const j of BONES[i]) {
+    JOINT_SCALE[j] = Math.max(JOINT_SCALE[j] ?? 0, BONE_SCALE[i] ?? 1);
+  }
+}
 
 // 2 triângulos por osso + um leque de PALM.length triângulos para a palma +
 // um hexágono por junta.
-const MAX_VERTICES = BONES.length * 6 + PALM.length * 3 + JOINTS.length * CAP_SEGMENTS * 3;
+// ... + 6 vértices do quad do pulso.
+const MAX_VERTICES = BONES.length * 6 + PALM.length * 3 + JOINTS.length * CAP_SEGMENTS * 3 + 6;
 
 export class HandOcclusion {
   constructor() {
@@ -174,7 +216,9 @@ export class HandOcclusion {
     const ndcX = (i) => this.smoothed[i].x * 2 - 1;
     const ndcY = (i) => 1 - this.smoothed[i].y * 2;
 
-    for (const [a, b] of BONES) {
+    for (let bone = 0; bone < BONES.length; bone += 1) {
+      const [a, b] = BONES[bone];
+      const width = halfWidth * (BONE_SCALE[bone] ?? 1);
       // Perpendicular calculada em espaço corrigido pelo aspecto, para a
       // espessura ficar uniforme na tela e não achatada num dos eixos.
       const ax = ndcX(a) * aspect;
@@ -182,16 +226,50 @@ export class HandOcclusion {
       const bx = ndcX(b) * aspect;
       const by = ndcY(b);
       const length = Math.hypot(bx - ax, by - ay) || 1;
-      const px = (-(by - ay) / length) * halfWidth;
-      const py = ((bx - ax) / length) * halfWidth;
+      const px = (-(by - ay) / length) * width;
+      const py = ((bx - ax) / length) * width;
+
+      // A ponta do dedo continua além do landmark, que fica no centro da polpa.
+      // Sem esta sobra a máscara termina no meio da unha e o equipamento
+      // reaparece por cima da ponta do dedo.
+      const overshoot = TIP_OVERSHOOT[bone] ?? 0;
+      const ex = ((bx - ax) / length) * width * overshoot;
+      const ey = ((by - ay) / length) * width * overshoot;
 
       const p1 = [(ax + px) / aspect, ay + py];
-      const p2 = [(bx + px) / aspect, by + py];
-      const p3 = [(bx - px) / aspect, by - py];
+      const p2 = [(bx + px + ex) / aspect, by + py + ey];
+      const p3 = [(bx - px + ex) / aspect, by - py + ey];
       const p4 = [(ax - px) / aspect, ay - py];
 
       push(p1[0], p1[1]); push(p2[0], p2[1]); push(p3[0], p3[1]);
       push(p1[0], p1[1]); push(p3[0], p3[1]); push(p4[0], p4[1]);
+    }
+
+    // Faixa do pulso: prolonga a mão para além do landmark 0, na direção
+    // oposta aos dedos, com a largura da palma.
+    {
+      const wx = ndcX(L.wrist) * aspect;
+      const wy = ndcY(L.wrist);
+      const mx = ndcX(L.middleMcp) * aspect;
+      const my = ndcY(L.middleMcp);
+      const span = Math.hypot(wx - mx, wy - my) || 1;
+      const dx = ((wx - mx) / span) * span * WRIST_EXTENSION;
+      const dy = ((wy - my) / span) * span * WRIST_EXTENSION;
+
+      const ix = ndcX(L.indexMcp) * aspect;
+      const iy = ndcY(L.indexMcp);
+      const px = ndcX(L.pinkyMcp) * aspect;
+      const py = ndcY(L.pinkyMcp);
+      const across = Math.hypot(px - ix, py - iy) || 1;
+      const nx = ((-(wy - my) / span) * across) / 2;
+      const ny = (((wx - mx) / span) * across) / 2;
+
+      const a1 = [(wx + nx) / aspect, wy + ny];
+      const a2 = [(wx - nx) / aspect, wy - ny];
+      const b1 = [(wx + nx + dx) / aspect, wy + ny + dy];
+      const b2 = [(wx - nx + dx) / aspect, wy - ny + dy];
+      push(a1[0], a1[1]); push(b1[0], b1[1]); push(b2[0], b2[1]);
+      push(a1[0], a1[1]); push(b2[0], b2[1]); push(a2[0], a2[1]);
     }
 
     // Um hexágono do raio dos ossos em cada junta, arredondando a transição
@@ -200,13 +278,16 @@ export class HandOcclusion {
       const jx = ndcX(j);
       const jy = ndcY(j);
       const ax = jx * aspect; // mesmo espaço corrigido por aspecto dos ossos
+      // O disco acompanha a espessura de quem chega na junta: um disco de
+      // tamanho único voltaria a engordar as pontas dos dedos.
+      const radius = halfWidth * (JOINT_SCALE[j] ?? 1);
       for (let s = 0; s < CAP_SEGMENTS; s += 1) {
         const a0 = (s / CAP_SEGMENTS) * Math.PI * 2;
         const a1 = ((s + 1) / CAP_SEGMENTS) * Math.PI * 2;
-        const x0 = (ax + Math.cos(a0) * halfWidth) / aspect;
-        const y0 = jy + Math.sin(a0) * halfWidth;
-        const x1 = (ax + Math.cos(a1) * halfWidth) / aspect;
-        const y1 = jy + Math.sin(a1) * halfWidth;
+        const x0 = (ax + Math.cos(a0) * radius) / aspect;
+        const y0 = jy + Math.sin(a0) * radius;
+        const x1 = (ax + Math.cos(a1) * radius) / aspect;
+        const y1 = jy + Math.sin(a1) * radius;
         push(jx, jy); push(x0, y0); push(x1, y1);
       }
     }

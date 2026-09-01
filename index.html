@@ -25,7 +25,6 @@
 
     <p id="ar-instructions" class="instructions"></p>
     <p id="depth-badge" class="depth-badge" hidden></p>
-    <p id="gesture-badge" class="gesture-badge" hidden></p>
 
     <div id="diag-panel" class="diag-panel" hidden></div>
 
@@ -41,29 +40,44 @@
       <button id="gesture-legend-close" class="btn-tiny">Entendi</button>
     </div>
 
-    <div id="scale-control" class="scale-control" hidden>
-      <label for="scale-range">Escala</label>
-      <input id="scale-range" type="range" min="0" max="1000" value="500" step="1"
-             aria-label="Escala do equipamento" />
-      <output id="scale-value">100%</output>
-    </div>
+    <!-- Tudo o que é controle fica numa pilha só, colada no rodapé. Antes a
+         barra de escala era filha direta do .hud e o layout a jogava para o
+         TOPO, embaixo da barra de status do sistema. -->
+    <div class="hud-bottom">
+      <p id="gesture-badge" class="gesture-badge" hidden></p>
 
-    <!-- Catálogo de elementos: preenchido a partir de CATALOG em src/models.js,
-         para que acrescentar um elemento novo não exija tocar no HTML. -->
-    <div id="catalog" class="catalog" hidden>
-      <p class="catalog-title">Adicionar à instalação</p>
-      <div id="catalog-items" class="catalog-items"></div>
-      <button id="catalog-close" class="btn-tiny">Fechar</button>
-    </div>
+      <!-- Catálogo de elementos: preenchido a partir de CATALOG em
+           src/models.js, para que acrescentar um elemento novo não exija tocar
+           no HTML. Fica NO FLUXO da pilha, logo acima dos controles: posicionado
+           por deslocamento fixo ele encavalava na barra de escala, e o
+           deslocamento certo dependeria de quais controles estão visíveis. -->
+      <div id="catalog" class="catalog" hidden>
+        <p class="catalog-title">Adicionar à instalação</p>
+        <div id="catalog-items" class="catalog-items"></div>
+        <button id="catalog-close" class="btn-tiny">Fechar</button>
+      </div>
 
-    <div class="hud-buttons">
-      <button id="diag-btn" class="btn-icon" aria-label="Diagnóstico técnico">i</button>
-      <button id="depth-btn" class="btn-icon" aria-label="Ver mapa de profundidade" hidden>D</button>
-      <button id="add-btn" class="btn-secondary" hidden>+ Adicionar</button>
-      <button id="remove-btn" class="btn-secondary" hidden>Remover</button>
-      <button id="reposition-btn" class="btn-secondary" hidden>Reposicionar</button>
-      <button id="explode-btn" class="btn-secondary" hidden>Vista explodida</button>
-      <button id="exit-ar-btn" class="btn-secondary">Sair da AR</button>
+      <div id="scale-control" class="scale-control" hidden>
+        <label for="scale-range">Escala</label>
+        <input id="scale-range" type="range" min="0" max="1000" value="500" step="1"
+               aria-label="Escala do equipamento" />
+        <output id="scale-value">100%</output>
+      </div>
+
+      <!-- Ações do elemento selecionado, na linha de cima: são as mais usadas
+           e ficam mais perto do polegar que a linha de sessão. -->
+      <div class="hud-buttons">
+        <button id="add-btn" class="btn-secondary" hidden>+ Adicionar</button>
+        <button id="remove-btn" class="btn-secondary" hidden>Remover</button>
+        <button id="explode-btn" class="btn-secondary" hidden>Explodir</button>
+      </div>
+
+      <div class="hud-buttons hud-buttons-session">
+        <button id="diag-btn" class="btn-icon" aria-label="Diagnóstico técnico">i</button>
+        <button id="depth-btn" class="btn-icon" aria-label="Ver mapa de profundidade" hidden>D</button>
+        <button id="reposition-btn" class="btn-secondary" hidden>Reposicionar</button>
+        <button id="exit-ar-btn" class="btn-secondary">Sair da AR</button>
+      </div>
     </div>
   </div>
 

@@ -62,7 +62,7 @@ function applySceneState(state) {
   ui.removeBtn.hidden = !selected?.removable;
   ui.explodeBtn.hidden = !selected?.explodable;
   ui.explodeBtn.classList.toggle("is-on", Boolean(selected?.exploded));
-  ui.explodeBtn.textContent = selected?.exploded ? "Remontar" : "Vista explodida";
+  ui.explodeBtn.textContent = selected?.exploded ? "Remontar" : "Explodir";
 }
 
 function showMessage(text) {
@@ -79,13 +79,17 @@ function setStatus(text) {
 function showDepthStatus(status) {
   clearTimeout(depthBadgeTimer);
   ui.depthBadge.hidden = false;
+  // A profundidade fica desligada por padrão quando há máscara de mão: ela
+  // recortava o equipamento sem nada na frente. Ver src/ar-experience.js.
   ui.depthBadge.textContent = status.active
     ? "Oclusão por profundidade ativa"
-    : status.enabled
-      ? `Profundidade negociada (${status.usage})`
-      : status.mask
-        ? "Sem profundidade — oclusão da mão por rastreamento"
-        : "Sem oclusão por profundidade";
+    : status.mask && !status.depthOn
+      ? "Oclusão pela mão (profundidade desligada)"
+      : status.enabled
+        ? `Profundidade negociada (${status.usage})`
+        : status.mask
+          ? "Sem profundidade — oclusão da mão por rastreamento"
+          : "Sem oclusão por profundidade";
   ui.depthBadge.classList.toggle("is-off", !status.active);
   // O visualizador serve às duas camadas que desenhamos: mapa de profundidade
   // (caminho CPU) e silhueta da mão.
@@ -149,7 +153,7 @@ async function startAR() {
       ui.addBtn.hidden = true;
       ui.addBtn.classList.remove("is-on");
       ui.removeBtn.hidden = true;
-      ui.catalog.hidden = true;
+      closeCatalog();
       ui.explodeBtn.hidden = true;
       ui.explodeBtn.classList.remove("is-on");
       ui.scaleControl.hidden = true;
@@ -182,14 +186,14 @@ async function startAR() {
   }
 }
 
-async function init() {
-  const problem = await checkSupport();
-  if (problem) {
-    ui.startBtn.disabled = true;
-    showMessage(problem);
-    return;
-  }
-
+/**
+ * Liga a interface. Roda ANTES da checagem de suporte, e de propósito: nada
+ * aqui depende de WebXR, e deixar a ligação atrás do `return` de "aparelho não
+ * suportado" já custou um bug — os botões do catálogo existiam na tela sem
+ * ninguém escutando o clique. Também é o que torna a UI testável num navegador
+ * comum, sem sessão AR.
+ */
+function wireUi() {
   diagnostics = new Diagnostics(ui.diagPanel);
   gestureHud = new GestureHud({
     badgeEl: ui.gestureBadge,
@@ -209,9 +213,12 @@ async function init() {
   ui.exitBtn.addEventListener("click", () => experience?.end());
   ui.repositionBtn.addEventListener("click", () => {
     ui.repositionBtn.hidden = true;
+    ui.addBtn.hidden = true;
+    ui.removeBtn.hidden = true;
     ui.explodeBtn.hidden = true;
     ui.explodeBtn.classList.remove("is-on");
     ui.scaleControl.hidden = true;
+    closeCatalog();
     experience?.reposition();
   });
 
@@ -224,6 +231,51 @@ async function init() {
   // Não mexe nos botões aqui: toggleExplode reporta o estado da cena, e
   // applySceneState é o único lugar que decide como os botões ficam.
   ui.explodeBtn.addEventListener("click", () => experience?.toggleExplode());
+
+  // O catálogo é montado a partir de CATALOG: acrescentar um elemento em
+  // src/models.js já o faz aparecer aqui, sem tocar em HTML nem em CSS.
+  for (const item of CATALOG) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "catalog-item";
+    button.dataset.modelId = item.id;
+    const icon = document.createElement("span");
+    icon.setAttribute("aria-hidden", "true");
+    icon.textContent = item.icon ?? "";
+    button.append(icon, document.createTextNode(item.label));
+    button.addEventListener("click", async () => {
+      closeCatalog();
+      await experience?.addElement(item.id);
+    });
+    ui.catalogItems.append(button);
+  }
+
+  ui.addBtn.addEventListener("click", () => {
+    if (ui.catalog.hidden) openCatalog();
+    else closeCatalog();
+  });
+  ui.catalogClose.addEventListener("click", closeCatalog);
+  ui.removeBtn.addEventListener("click", () => experience?.removeSelected());
+}
+
+function openCatalog() {
+  ui.catalog.hidden = false;
+  ui.addBtn.classList.add("is-on");
+}
+
+function closeCatalog() {
+  ui.catalog.hidden = true;
+  ui.addBtn.classList.remove("is-on");
+}
+
+async function init() {
+  wireUi();
+
+  const problem = await checkSupport();
+  if (problem) {
+    ui.startBtn.disabled = true;
+    showMessage(problem);
+  }
 }
 
 init();

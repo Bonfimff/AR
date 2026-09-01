@@ -60,33 +60,94 @@ export async function loadEquipment(entry) {
 }
 
 /**
- * Anel discreto no piso, sob o objeto, indicando o estado "selecionado".
- * Entra como filho do objeto para acompanhar posição, rotação e escala.
+ * Caixa de contorno indicando o estado "selecionado".
+ *
+ * Era um anel no piso, que só faz sentido para algo APOIADO no piso. Com a
+ * instalação ganhando luminária de teto, tomada na parede e eletroduto
+ * inclinado, o anel virava um disco deitado atravessando a peça — e num
+ * eletroduto de 2 m ele tinha 1,2 m de diâmetro. Uma caixa acompanha qualquer
+ * peça em qualquer orientação.
  */
-export function createSelectionIndicator(object) {
-  const radius = object.userData.footprint * 1.2;
-  const ring = new THREE.Mesh(
-    new THREE.RingGeometry(radius * 0.94, radius, 48).rotateX(-Math.PI / 2),
-    new THREE.MeshBasicMaterial({
+export function createSelectionOutline(object) {
+  // Cubo unitário em arestas: 12 segmentos, escalados para a caixa da peça.
+  const positions = [];
+  const corner = (i) => [i & 1 ? 0.5 : -0.5, i & 2 ? 0.5 : -0.5, i & 4 ? 0.5 : -0.5];
+  for (let i = 0; i < 8; i += 1) {
+    for (const bit of [1, 2, 4]) {
+      if (i & bit) continue; // desenha cada aresta uma vez só
+      positions.push(...corner(i), ...corner(i | bit));
+    }
+  }
+
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+
+  const outline = new THREE.LineSegments(
+    geometry,
+    new THREE.LineBasicMaterial({
       color: 0x00e0a4,
       transparent: true,
-      opacity: 0.85,
-      // Mesmo tratamento do retículo: é uma guia de UI, não algo físico, então
-      // não deve ficar recortado pelo mapa de profundidade. Sem isto, ruído do
-      // depth-from-motion perto do chão (ver despeckle() em occlusion.js)
-      // quebrava o anel em arcos soltos em vez de um círculo contínuo.
+      opacity: 0.9,
+      // Mesmo tratamento do retículo: é guia de UI, não algo físico, e não
+      // deve ficar recortada pelo mapa de profundidade.
       depthTest: false,
       depthWrite: false,
-      side: THREE.DoubleSide,
     })
   );
-  ring.name = "SelectionIndicator";
-  ring.position.y = 0.005; // evita z-fighting com o piso
-  ring.renderOrder = 5; // depois das passadas de oclusão (renderOrder negativo)
-  ring.visible = false;
-  ring.raycast = () => {}; // não deve capturar o toque de seleção
-  object.add(ring);
-  return ring;
+  outline.name = "SelectionOutline";
+  outline.renderOrder = 5;
+  outline.visible = false;
+  outline.raycast = () => {}; // não captura o toque de seleção
+  object.add(outline);
+  fitSelectionOutline(outline, object);
+  return outline;
+}
+
+/**
+ * Ajusta o contorno à caixa da peça, em espaço LOCAL dela.
+ *
+ * A caixa é montada a partir da geometria de cada malha, e não com
+ * `Box3.setFromObject` seguido da inversa da matriz: aquele caminho devolve
+ * uma caixa alinhada ao MUNDO, e desalinhá-la de volta infla o resultado em
+ * qualquer peça girada — justamente o caso do eletroduto.
+ */
+export function fitSelectionOutline(outline, object) {
+  const box = new THREE.Box3();
+  const point = new THREE.Vector3();
+  const local = new THREE.Matrix4();
+
+  object.updateWorldMatrix(true, true);
+  const toLocal = new THREE.Matrix4().copy(object.matrixWorld).invert();
+
+  object.traverse((child) => {
+    if (!child.isMesh || !child.geometry || child === outline) return;
+    if (!child.geometry.boundingBox) child.geometry.computeBoundingBox();
+    const bounds = child.geometry.boundingBox;
+    local.multiplyMatrices(toLocal, child.matrixWorld);
+    for (let i = 0; i < 8; i += 1) {
+      point
+        .set(
+          i & 1 ? bounds.max.x : bounds.min.x,
+          i & 2 ? bounds.max.y : bounds.min.y,
+          i & 4 ? bounds.max.z : bounds.min.z
+        )
+        .applyMatrix4(local);
+      box.expandByPoint(point);
+    }
+  });
+
+  if (box.isEmpty()) return outline;
+  const size = box.getSize(new THREE.Vector3());
+  const center = box.getCenter(new THREE.Vector3());
+  // Uma folga pequena e um piso de tamanho: numa tomada de 9 cm a caixa
+  // encostada na peça fica indistinguível da própria peça.
+  outline.scale.set(
+    Math.max(size.x, 0.05) * 1.08,
+    Math.max(size.y, 0.05) * 1.08,
+    Math.max(size.z, 0.05) * 1.08
+  );
+  outline.position.copy(center);
+  return outline;
 }
 
 /** Libera geometrias, materiais e texturas de uma subárvore. */

@@ -30,27 +30,39 @@ const MARKER_ON = new THREE.Color(0x22c55e);
 const MARKER_OFF = new THREE.Color(0xf97316);
 
 export class PanelController {
-  constructor(root) {
+  /**
+   * @param {THREE.Object3D} root raiz do elemento
+   * @param {{circuit?: CircuitModel, prefix?: string}} [options]
+   *   `circuit` é o modelo GLOBAL da cena; `prefix` é o id da instância. Sem
+   *   eles o controlador monta um modelo próprio a partir do esquema do GLB —
+   *   é assim que um elemento isolado funciona fora da cena (e nos testes).
+   */
+  constructor(root, { circuit = null, prefix = "" } = {}) {
     this.root = root;
-    this.circuit = null;
-    this.byCircuit = new Map(); // circuitId -> {meshes: [], lever: Object3D|null}
+    this.prefix = prefix;
+    this.shared = Boolean(circuit); // quem avisa a mudança é a cena, não nós
+    this.circuit = circuit;
+    this.byCircuit = new Map(); // id GLOBAL -> {object, lever, marker, ...}
     this.door = null;
     this.doorFactor = 0;
     this.doorTarget = 0;
     this.onAction = null;
+    this.onLoadPick = null;
 
     const schema = root?.userData?.circuits;
-    if (!schema) return;
-    this.circuit = CircuitModel.fromJSON(schema);
+    if (!this.circuit) {
+      if (!schema) return;
+      this.circuit = CircuitModel.fromJSON(schema);
+    }
 
     root.traverse((obj) => {
       const data = obj.userData ?? {};
-      if (data.circuitId) this.entry(data.circuitId).object = obj;
+      if (data.circuitId) this.entry(this.gid(data.circuitId)).object = obj;
       // Alavanca e marcador são filhos do disjuntor: o circuito é o do pai.
       if (data.role === "lever" || data.role === "marker") {
         const owner = obj.parent?.userData?.circuitId;
         if (owner) {
-          const entry = this.entry(owner);
+          const entry = this.entry(this.gid(owner));
           if (data.role === "lever") {
             entry.lever = obj;
             entry.leverRest = obj.position.y;
@@ -64,8 +76,15 @@ export class PanelController {
 
     this.setupHinge();
     this.prepareMaterials();
-    this.circuit.onChange = () => this.applyState();
+    // Com modelo compartilhado há vários painéis ouvindo a mesma mudança, e
+    // onChange guarda um só callback: quem redistribui é a ElementScene.
+    if (!this.shared) this.circuit.onChange = () => this.applyState();
     this.applyState();
+  }
+
+  /** Id local do GLB -> id global no modelo da cena. */
+  gid(localId) {
+    return this.prefix ? `${this.prefix}/${localId}` : localId;
   }
 
   entry(circuitId) {
@@ -185,16 +204,16 @@ export class PanelController {
         return true;
       }
 
-      const id = data.circuitId ?? node.parent?.userData?.circuitId;
-      if (!id) continue;
+      const local = data.circuitId ?? node.parent?.userData?.circuitId;
+      if (!local) continue;
+      const id = this.gid(local);
       const element = this.circuit?.get(id);
       if (!element) continue;
 
       if (!KIND[element.kind].switchable) {
-        // Carga: não se manobra, mas informar o estado é útil.
-        this.onAction?.(
-          `${element.label}: ${this.circuit.isLive(id) ? "energizada" : "sem energia"}`
-        );
+        // Carga: não se manobra. Quem chama decide o que fazer — na cena, é
+        // abrir o menu de associação, que é a única ação útil sobre uma carga.
+        this.onLoadPick?.(id, element);
         return true;
       }
 

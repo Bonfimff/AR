@@ -79,7 +79,8 @@ um GLB por tipo:
 | Tomada | `outlet` | — (marcador de energização) |
 | Interruptor | `switch` | a tecla |
 | Luminária | `lamp` | — (o difusor acende) |
-| Eletroduto | nenhum | — (infraestrutura) |
+| Eletroduto | nenhum | — (infraestrutura; traçado de A até B) |
+| Curva 90° / 45° | nenhum | — (infraestrutura) |
 
 **Cada arquivo carrega o próprio esquema elétrico** em `scene.extras.circuits`,
 descrevendo só o que ele contém — sem fonte e sem disjuntor. A ligação com o
@@ -450,12 +451,90 @@ referência da planta.
 A mão agora escolhe o alvo **na hora da pinça**, pegando o elemento mais
 próximo da câmera — senão pinçar uma tomada à frente do quadro pegaria o quadro.
 
-### Elemento solto não aparece energizado
+### Um circuito para a instalação inteira
 
-Cada GLB traz só o próprio esquema, sem fonte. Uma tomada recém-colocada não
-tem alimentação, `isLive` é falso e o marcador fica **laranja**. Isso é
-correto e proposital: ela realmente não está ligada a nada ainda. Associar
-cargas a um disjuntor do quadro é o passo seguinte.
+A [ElementScene](src/element-scene.js) mantém **um** `CircuitModel` para toda a
+cena, não um por elemento — é o que permite ligar a luminária do teto ao
+interruptor da parede e ao disjuntor do quadro, que são três objetos 3D
+distintos e um circuito só.
+
+Os ids locais de cada GLB (`carga`, `chave`, `d1`) ganham prefixo da instância:
+cinco tomadas trazem cinco `carga`, e sem prefixo colidiriam. Cada elemento
+ganha também uma **etiqueta** curta e estável — I1, T2, L3, Q1 — que aparece no
+rótulo do circuito (`I2 · Interruptor`). O contador da etiqueta nunca volta
+atrás: contar os existentes faria a próxima tomada depois de apagar a T1
+chamar-se T2 de novo, dois nomes iguais no mesmo menu.
+
+### Associação
+
+| Toque em | Escolhe entre |
+|---|---|
+| luminária | os interruptores da instalação |
+| interruptor | os disjuntores do quadro |
+| tomada | os disjuntores do quadro |
+
+Quem pode alimentar o quê está declarado em `FEEDER_KIND`, e é **regra da
+instalação, não escolha de interface**. Disjuntor e fonte não aparecem: o
+disjuntor já é alimentado pela entrada do quadro, e oferecê-lo para associação
+deixava um disjuntor "ligado" em outro.
+
+Associar **substitui** a ligação anterior — uma carga alimentada por dois
+circuitos seria erro de instalação, não redundância.
+
+Tocar numa carga (luminária, tomada) abre o menu direto: é a única ação útil
+sobre ela, já que carga não se manobra. Para o interruptor o toque **aciona**,
+então a associação sai pelo botão **Associar**.
+
+Com a cadeia montada, desligar o interruptor apaga a luminária, e desligar o
+disjuntor apaga tudo o que pende dele — inclusive deixando o interruptor
+fechado porém sem tensão, que é a distinção `isEnergized` × `isLive` de
+[circuits.js](src/circuits.js) aparecendo na prática.
+
+Um elemento recém-colocado **não** aparece energizado: não está ligado a nada
+ainda, `isLive` é falso e o marcador fica laranja. Remover um elemento limpa
+seus circuitos e as referências a ele.
+
+### Eletroduto de A até B
+
+Eletroduto **não se coloca, se traça**: ele existe *entre* duas coisas. Pedir
+ao usuário para posicioná-lo e girá-lo à mão seria trabalho manual para algo
+que o app calcula exatamente. Por isso ele não está no catálogo — o botão
+**Eletroduto** entra num modo de dois toques: um em cada elemento.
+
+O modelo tem 1 m ao longo de X e é **esticado** até o comprimento do vão. O
+esticamento vai num grupo intermediário (`Stretch`), não na raiz: a raiz carrega
+a escala do usuário, e misturar as duas faria o eletroduto mudar de comprimento
+ao escalar a peça.
+
+Onde o trecho encosta vem de `connect` no registro do modelo, em coordenadas
+locais. Sem isso ele miraria o centro da caixa envolvente — que numa luminária
+de teto cai no meio do difusor e num quadro de 2 m cai na altura da cintura.
+
+**Curvas de 90° e 45°** são elementos do catálogo, com os dois braços se
+encontrando na origem do modelo: posicionadas no canto, os trechos ligam nelas
+sem folga. Um trecho pode ir direto do quadro à tomada, ou passar por quantas
+curvas o traçado exigir. Curva e eletroduto são infraestrutura — não têm
+circuito e não entram no modelo elétrico.
+
+### Contorno de seleção, não anel de piso
+
+O indicador de seleção era um anel no piso, que só faz sentido para algo
+apoiado no piso. Com luminária de teto, tomada na parede e eletroduto
+inclinado, ele virava um disco deitado atravessando a peça — num eletroduto de
+2 m, com 1,2 m de diâmetro. Agora é uma caixa de arestas, que acompanha
+qualquer peça em qualquer orientação.
+
+A caixa é montada a partir da geometria de cada malha, e **não** com
+`Box3.setFromObject` seguido da matriz inversa: aquele caminho devolve uma
+caixa alinhada ao mundo, e desalinhá-la de volta infla o resultado em qualquer
+peça girada — justamente o caso do eletroduto.
+
+### Posição em X, Y e Z
+
+O arrasto move em X/Z e a pinça vertical em Y, mas ajuste fino com o dedo em AR
+é impraticável. O botão **Mover** abre um controle de passos de 5 cm nos três
+eixos — fino o bastante para encostar uma tomada na parede, grosso o bastante
+para atravessar um cômodo sem cansar o polegar.
 
 ## Interação por peça
 

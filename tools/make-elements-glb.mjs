@@ -4,7 +4,9 @@
  *   models/tomada.glb        tomada 2P+T de parede
  *   models/interruptor.glb   interruptor simples (a tecla é acionável)
  *   models/luminaria.glb     luminária de teto
- *   models/eletroduto.glb    trecho reto de eletroduto
+ *   models/eletroduto.glb    trecho reto de eletroduto (esticado de A até B)
+ *   models/curva90.glb       curva de 90° para mudar de direção
+ *   models/curva45.glb       curva de 45°
  *
  * Todos procedurais, pelo mesmo motivo do quadro: modelo próprio, sem dúvida
  * de licença. Compartilham o construtor em tools/glb.mjs.
@@ -127,6 +129,37 @@ make(
   },
   []
 );
+
+// ---------------------------------------------------------------- curvas
+// Peças de mudança de direção. Os dois braços têm 12 cm e se encontram na
+// ORIGEM do modelo, que é onde os eletrodutos vão chegar — assim a curva pode
+// ser posicionada no canto e os trechos ligam nela sem folga.
+//
+// A curva é infraestrutura, como o eletroduto: não tem circuito.
+const ARM = 0.12;
+const RADIUS = 0.0125;
+const Y = RADIUS;
+
+function elbow(name, degrees) {
+  make(
+    name,
+    ({ M, tube, cylinder, declare }) => {
+      declare(name === "curva90" ? "Curva90" : "Curva45", {});
+      const part = name === "curva90" ? "Curva90" : "Curva45";
+      const rad = (degrees * Math.PI) / 180;
+      // braço de entrada, sempre ao longo de -X
+      tube(part, M.Conduite, [-ARM, Y, 0], [0, Y, 0], RADIUS);
+      // braço de saída, girado no plano horizontal
+      tube(part, M.Conduite, [0, Y, 0], [Math.cos(Math.PI - rad) * ARM, Y, Math.sin(rad) * ARM], RADIUS);
+      // luva no vértice, que também disfarça a emenda entre os dois braços
+      cylinder(part, M.Metal, [0, Y, 0], RADIUS * 1.3, 0.04, "y", 10);
+    },
+    []
+  );
+}
+
+elbow("curva90", 90);
+elbow("curva45", 45);
 
 for (const r of results) {
   console.log(

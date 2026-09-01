@@ -120,10 +120,14 @@ declare("Porta", {
 const railZ = 0.02;
 const breakers = [];
 
+// Três circuitos independentes, sem disjuntor geral. O geral existia para
+// demonstrar hierarquia, mas com cargas espalhadas pela instalação o que o
+// usuário precisa nomear é "a que disjuntor esta tomada está ligada" — e três
+// nomes curtos e simétricos (D1, D2, D3) fazem isso melhor.
 const LAYOUT = [
-  { id: "geral", label: "Disjuntor geral", x: -0.19 },
-  { id: "c01", label: "Circuito 1", x: 0.0 },
-  { id: "c02", label: "Circuito 2", x: 0.19 },
+  { id: "d1", label: "D1", x: -0.19 },
+  { id: "d2", label: "D2", x: 0.0 },
+  { id: "d3", label: "D3", x: 0.19 },
 ];
 
 const breakerY = 1.16;
@@ -131,7 +135,7 @@ const rowPart = "Fileira1";
 box(rowPart, M.Ferragem, [0, breakerY - 0.15, railZ], [W - 0.16, 0.014, 0.032]);
 
 for (const { id, label, x } of LAYOUT) {
-  breakers.push({ id, label, geral: id === "geral" });
+  breakers.push({ id, label });
 
   const body = declare(`Disj-${id}`, { parent: rowPart, extras: { circuitId: id } });
   box(body, M.Disjuntor, [x, breakerY, railZ + 0.045], [0.16, 0.26, 0.09]);
@@ -168,23 +172,21 @@ box("Porta", M.Placa, [0, 1.45, doorZ + 0.018], [0.34, 0.10, 0.004]);
 // não exige mexer em nenhuma lógica, e o formato é exatamente o que
 // circuits.js já serializa.
 const circuitElements = [
-  { id: "entrada", kind: "source", label: "Alimentação", feeds: ["geral"] },
   {
-    id: "geral",
-    kind: "breaker",
-    label: "Disjuntor geral",
-    feeds: breakers.filter((b) => !b.geral).map((b) => b.id),
+    id: "entrada",
+    kind: "source",
+    label: "Alimentação",
+    feeds: breakers.map((b) => b.id),
   },
-  ...breakers
-    .filter((b) => !b.geral)
-    .map((b, i, all) => ({
-      id: b.id,
-      kind: "breaker",
-      label: b.label,
-      // As lâmpadas de sinalização da porta são divididas igualmente entre os
-      // circuitos: desligar um apaga metade, o geral apaga todas.
-      feeds: lampIds.filter((_, n) => n % all.length === i),
-    })),
+  ...breakers.map((b, i, all) => ({
+    id: b.id,
+    kind: "breaker",
+    label: b.label,
+    // As lâmpadas de sinalização da porta se dividem entre os disjuntores:
+    // desligar um apaga só as dele. Cargas de fora da instalação são ligadas
+    // em runtime, quando o usuário associa (ver src/element-scene.js).
+    feeds: lampIds.filter((_, n) => n % all.length === i),
+  })),
   ...lampIds.map((id, i) => ({
     id,
     kind: "lamp",

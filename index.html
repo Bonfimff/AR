@@ -57,6 +57,31 @@
         <button id="catalog-close" class="btn-tiny">Fechar</button>
       </div>
 
+      <!-- Menu de associação: a que interruptor esta lâmpada responde, ou a
+           que disjuntor esta tomada está ligada. Montado em runtime a partir
+           do modelo elétrico. -->
+      <div id="assoc" class="catalog" hidden>
+        <p id="assoc-title" class="catalog-title"></p>
+        <div id="assoc-items" class="catalog-items"></div>
+        <button id="assoc-none" class="btn-tiny btn-tiny-quiet">Desligar do circuito</button>
+        <button id="assoc-close" class="btn-tiny">Fechar</button>
+      </div>
+
+      <!-- Posição do elemento selecionado, em passos de 5 cm. O arrasto move em
+           X/Z e a pinça vertical em Y, mas ajuste fino com o dedo em AR é
+           impraticável — daí o controle discreto. -->
+      <div id="move-pad" class="move-pad" hidden>
+        <span class="move-axis">X</span>
+        <button class="btn-nudge" data-axis="x" data-dir="-1">−</button>
+        <button class="btn-nudge" data-axis="x" data-dir="1">+</button>
+        <span class="move-axis">Y</span>
+        <button class="btn-nudge" data-axis="y" data-dir="-1">−</button>
+        <button class="btn-nudge" data-axis="y" data-dir="1">+</button>
+        <span class="move-axis">Z</span>
+        <button class="btn-nudge" data-axis="z" data-dir="-1">−</button>
+        <button class="btn-nudge" data-axis="z" data-dir="1">+</button>
+      </div>
+
       <div id="scale-control" class="scale-control" hidden>
         <label for="scale-range">Escala</label>
         <input id="scale-range" type="range" min="0" max="1000" value="500" step="1"
@@ -68,6 +93,9 @@
            e ficam mais perto do polegar que a linha de sessão. -->
       <div class="hud-buttons">
         <button id="add-btn" class="btn-secondary" hidden>+ Adicionar</button>
+        <button id="conduit-btn" class="btn-secondary" hidden>Eletroduto</button>
+        <button id="assoc-btn" class="btn-secondary" hidden>Associar</button>
+        <button id="move-btn" class="btn-secondary" hidden>Mover</button>
         <button id="remove-btn" class="btn-secondary" hidden>Remover</button>
         <button id="explode-btn" class="btn-secondary" hidden>Explodir</button>
       </div>

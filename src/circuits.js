@@ -105,6 +105,45 @@ export class CircuitModel {
   }
 
   /**
+   * Remove um elemento E toda referência a ele. Sem a segunda parte, apagar
+   * uma luminária deixaria o interruptor alimentando um id inexistente, que
+   * validate() passaria a acusar para sempre.
+   */
+  remove(id) {
+    if (!this.elements.delete(id)) return false;
+    for (const element of this.elements.values()) {
+      const at = element.feeds.indexOf(id);
+      if (at >= 0) element.feeds.splice(at, 1);
+    }
+    this._dirty = true;
+    this.solve();
+    return true;
+  }
+
+  /** Quem alimenta `id` diretamente. */
+  feedersOf(id) {
+    const feeders = [];
+    for (const element of this.elements.values()) {
+      if (element.feeds.includes(id)) feeders.push(element.id);
+    }
+    return feeders;
+  }
+
+  /**
+   * Desliga todas as entradas de `id`. É metade de "reassociar": uma carga
+   * alimentada por dois circuitos ao mesmo tempo seria um erro de instalação,
+   * não uma redundância — então associar substitui, não acumula.
+   */
+  clearFeedsInto(id) {
+    for (const element of this.elements.values()) {
+      const at = element.feeds.indexOf(id);
+      if (at >= 0) element.feeds.splice(at, 1);
+    }
+    this._dirty = true;
+    this.solve();
+  }
+
+  /**
    * Recalcula quem recebe tensão, a partir das fontes.
    *
    * Distinção que importa para um eletricista: um disjuntor DESLIGADO continua

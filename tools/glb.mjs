@@ -106,6 +106,70 @@ export function createBuilder({ materials, generator = "modo-ar-procedural" }) {
   }
 
   /**
+   * Tubo entre dois pontos QUAISQUER. O `cylinder` acima só anda nos eixos, e
+   * uma curva de 45° não anda em eixo nenhum.
+   */
+  function tube(part, mat, from, to, radius, segments = 10) {
+    const g = group(part, mat);
+    const d = [to[0] - from[0], to[1] - from[1], to[2] - from[2]];
+    const length = Math.hypot(...d) || 1;
+    const n = d.map((v) => v / length);
+
+    // Base ortonormal em volta da direção do tubo. O "para cima" auxiliar troca
+    // quando o tubo já é quase vertical, senão o produto vetorial degenera.
+    const up = Math.abs(n[1]) < 0.9 ? [0, 1, 0] : [1, 0, 0];
+    const cross = (a, b) => [
+      a[1] * b[2] - a[2] * b[1],
+      a[2] * b[0] - a[0] * b[2],
+      a[0] * b[1] - a[1] * b[0],
+    ];
+    const norm = (v) => {
+      const l = Math.hypot(...v) || 1;
+      return v.map((x) => x / l);
+    };
+    const u = norm(cross(n, up));
+    const w = cross(n, u);
+
+    const ring = (t, at) => {
+      const a = (t / segments) * Math.PI * 2;
+      const c = Math.cos(a) * radius;
+      const s2 = Math.sin(a) * radius;
+      return [
+        at[0] + u[0] * c + w[0] * s2,
+        at[1] + u[1] * c + w[1] * s2,
+        at[2] + u[2] * c + w[2] * s2,
+      ];
+    };
+
+    for (let t = 0; t < segments; t += 1) {
+      const p0 = ring(t, from);
+      const p1 = ring(t + 1, from);
+      const q0 = ring(t, to);
+      const q1 = ring(t + 1, to);
+      const mid = [
+        (p0[0] + p1[0]) / 2 - from[0],
+        (p0[1] + p1[1]) / 2 - from[1],
+        (p0[2] + p1[2]) / 2 - from[2],
+      ];
+      addQuad(g, p0, p1, q1, q0, norm(mid));
+    }
+
+    for (const [at, dir] of [[from, -1], [to, 1]]) {
+      const base = g.positions.length / 3;
+      g.positions.push(...at);
+      g.normals.push(n[0] * dir, n[1] * dir, n[2] * dir);
+      for (let t = 0; t <= segments; t += 1) {
+        g.positions.push(...ring(t, at));
+        g.normals.push(n[0] * dir, n[1] * dir, n[2] * dir);
+      }
+      for (let t = 0; t < segments; t += 1) {
+        if (dir > 0) g.indices.push(base, base + 1 + t, base + 2 + t);
+        else g.indices.push(base, base + 2 + t, base + 1 + t);
+      }
+    }
+  }
+
+  /**
    * @param {string} path arquivo .glb de saída
    * @param {object} [sceneExtras] vai para `gltf.scene.userData` (ex.: circuitos)
    */
@@ -244,5 +308,5 @@ export function createBuilder({ materials, generator = "modo-ar-procedural" }) {
     return { nodes, meshes, triangles, bytes: total };
   }
 
-  return { M: materialIndex, box, cylinder, declare, write };
+  return { M: materialIndex, box, cylinder, tube, declare, write };
 }

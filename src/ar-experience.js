@@ -66,6 +66,9 @@ export class ARExperience {
     this.lastReportedScale = 1;
     this.handEverDetected = false;
     this._inputKey = null; // chave de "alvo de entrada atual": ver applyInputTargets
+    this.associating = null; // id do circuito com menu de associação aberto
+    this.conduitMode = false;
+    this.conduitFrom = null;
 
     this.session = null;
     this.anchor = null;
@@ -290,6 +293,10 @@ export class ARExperience {
     this.scene3d = new ElementScene(this.anchorGroup);
     this.scene3d.onAction = (message) => this.onPanelAction?.(message);
     this.scene3d.onSelectionChange = () => this.reportScene();
+    this.scene3d.onCircuitChange = () => this.reportScene();
+    // Tocar numa carga (lâmpada, tomada) abre a associação: é a única ação
+    // útil sobre ela — carga não se manobra.
+    this.scene3d.onLoadPick = (circuitId) => this.openAssociation(circuitId);
 
     this.raycaster = new THREE.Raycaster();
     this._ndc = new THREE.Vector2();
@@ -341,6 +348,7 @@ export class ARExperience {
       return;
     }
     const hit = this.raycastScene(clientX, clientY);
+    if (this.handleConduitTap(hit?.element ?? null)) return;
     if (!hit) {
       this.setSelected(null);
       return;
@@ -363,6 +371,56 @@ export class ARExperience {
    * um circuito. Apontar é uma pose deliberada e distinta — não há esse risco,
    * e exigir uma pinça antes só tornaria o gesto trabalhoso.
    */
+  /**
+   * Modo "eletroduto A -> B": dois toques, um em cada elemento. Não é um
+   * elemento que se "coloca": um eletroduto existe entre duas coisas, e pedir
+   * ao usuário para posicioná-lo e girá-lo à mão seria trabalho manual para
+   * algo que o app pode calcular exatamente.
+   */
+  startConduit() {
+    this.conduitFrom = null;
+    this.conduitMode = true;
+    this.associating = null;
+    this.onStatus("Eletroduto: toque no primeiro elemento");
+    this.reportScene();
+  }
+
+  cancelConduit(message = "") {
+    if (!this.conduitMode) return;
+    this.conduitMode = false;
+    this.conduitFrom = null;
+    this.onStatus(message);
+    this.reportScene();
+  }
+
+  /** @returns {boolean} true se o toque foi consumido pelo modo eletroduto */
+  handleConduitTap(element) {
+    if (!this.conduitMode) return false;
+    if (!element) {
+      this.cancelConduit("Eletroduto cancelado");
+      this.onPanelAction?.("Eletroduto cancelado");
+      return true;
+    }
+    if (!this.conduitFrom) {
+      this.conduitFrom = element;
+      this.setSelected(element);
+      this.onStatus(`De ${element.tag} até... toque no segundo elemento`);
+      return true;
+    }
+    if (element === this.conduitFrom) return true; // mesmo elemento: ignora
+
+    const from = this.conduitFrom;
+    this.conduitMode = false;
+    this.conduitFrom = null;
+    this.onStatus("");
+    this.scene3d.connect(from, element).then((conduit) => {
+      this.syncHandTargets();
+      if (conduit) this.onPanelAction?.(`Eletroduto ${from.tag} → ${element.tag}`);
+      this.reportScene();
+    });
+    return true;
+  }
+
   handlePointTap(clientX, clientY) {
     if (this.awaitingPlacement) return;
     const hit = this.raycastScene(clientX, clientY);
@@ -389,6 +447,7 @@ export class ARExperience {
   /** @param {object|null} element elemento da cena, ou null para desselecionar */
   setSelected(element) {
     if (this.scene3d?.selected === element) return;
+    this.associating = null; // menu de associação é do elemento anterior
     this.scene3d?.select(element);
     this.applyInputTargets();
     if (!element) this.handController?.release();
@@ -484,17 +543,78 @@ export class ARExperience {
     this.applyInputTargets();
   }
 
+  /**
+   * Abre (ou fecha) o menu de associação de um elemento do circuito.
+   * @param {string|null} circuitId id GLOBAL, ou null para fechar
+   */
+  openAssociation(circuitId) {
+    this.associating = circuitId && this.associating !== circuitId ? circuitId : null;
+    this.reportScene();
+  }
+
+  /** Escolhe quem alimenta o circuito em associação. `null` desliga. */
+  chooseAssociation(sourceId) {
+    if (!this.associating) return;
+    const load = this.scene3d.circuit.get(this.associating);
+    this.scene3d.associate(this.associating, sourceId);
+    const source = sourceId ? this.scene3d.circuit.get(sourceId) : null;
+    this.onPanelAction?.(
+      source ? `${load?.label} ligada a ${source.label}` : `${load?.label} desligada do circuito`
+    );
+    this.associating = null;
+    this.reportScene();
+  }
+
+  /**
+   * Circuitos associáveis do elemento selecionado. Um interruptor e uma tomada
+   * têm um só; o quadro tem os três disjuntores, que são FONTES e não se
+   * associam a nada — por isso a lista pode sair vazia.
+   */
+  associableOf(element) {
+    if (!element || !this.scene3d) return [];
+    const out = [];
+    for (const id of element.panel?.byCircuit.keys() ?? []) {
+      if (this.scene3d.associationsFor(id)) out.push(id);
+    }
+    return out;
+  }
+
+  /** Move o elemento selecionado em passos fixos, pelo controle de tela. */
+  nudge(axis, step) {
+    const element = this.selectedElement;
+    if (!element) return;
+    element.root.position[axis] += step;
+    this.markInteracted();
+    this.reportScene();
+  }
+
   /** Estado da cena para a UI: o que existe e o que está selecionado. */
   reportScene() {
     const element = this.selectedElement;
+    const associable = this.associableOf(element);
+    const menu = this.associating ? this.scene3d.associationsFor(this.associating) : null;
+
     this.onSceneChange?.({
       count: this.scene3d?.elements.length ?? 0,
+      conduit: this.conduitMode ? { from: this.conduitFrom?.tag ?? null } : null,
       selected: element
         ? {
-            label: element.label,
+            label: `${element.tag} · ${element.label}`,
             explodable: element.explode?.explodable ?? false,
             exploded: element.explode?.exploded ?? false,
             removable: element !== this.scene3d.anchorElement,
+            position: element.root.position.clone(),
+            // Um só circuito associável: o botão "Associar" já sabe qual abrir.
+            associable: associable[0] ?? null,
+          }
+        : null,
+      association: menu
+        ? {
+            id: this.associating,
+            label: this.scene3d.circuit.get(this.associating)?.label ?? "",
+            kind: menu.kind,
+            current: menu.current,
+            options: menu.options,
           }
         : null,
     });
@@ -516,6 +636,7 @@ export class ARExperience {
     this.placementRequested = false;
     this.anchorGroup.visible = false;
     this.detachAnchor();
+    this.cancelConduit();
     this.placementGuide.reset();
     // Reposicionar remonta tudo: evita arrastar peças soltas junto e devolve
     // os circuitos ao estado de fábrica.
@@ -592,6 +713,9 @@ export class ARExperience {
 
     this.onStatus(this.hasInteracted ? "" : "Toque no objeto para manipular");
     this.onPlaced(this.scene3d.anchorElement?.explode?.explodable ?? false);
+    // Já deixa o quadro selecionado: os botões do elemento (vista explodida,
+    // posição) agem sobre a seleção, e sem isto eles sumiam logo após colocar.
+    this.setSelected(this.scene3d.anchorElement);
     this.reportScene();
 
     if (this.anchorsSupported) {

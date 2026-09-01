@@ -20,6 +20,15 @@ const ui = {
   catalog: document.getElementById("catalog"),
   catalogItems: document.getElementById("catalog-items"),
   catalogClose: document.getElementById("catalog-close"),
+  conduitBtn: document.getElementById("conduit-btn"),
+  assocBtn: document.getElementById("assoc-btn"),
+  assoc: document.getElementById("assoc"),
+  assocTitle: document.getElementById("assoc-title"),
+  assocItems: document.getElementById("assoc-items"),
+  assocNone: document.getElementById("assoc-none"),
+  assocClose: document.getElementById("assoc-close"),
+  moveBtn: document.getElementById("move-btn"),
+  movePad: document.getElementById("move-pad"),
   explodeBtn: document.getElementById("explode-btn"),
   exitBtn: document.getElementById("exit-ar-btn"),
   gestureBadge: document.getElementById("gesture-badge"),
@@ -47,7 +56,10 @@ function showScale(scale) {
   ui.scaleValue.textContent = `${Math.round(scale * 100)}%`;
 }
 
+const NUDGE_METERS = 0.05;
+
 let experience = null;
+let associableId = null; // circuito associável do elemento selecionado
 let depthBadgeTimer = null;
 let diagnostics = null;
 let gestureHud = null;
@@ -63,6 +75,57 @@ function applySceneState(state) {
   ui.explodeBtn.hidden = !selected?.explodable;
   ui.explodeBtn.classList.toggle("is-on", Boolean(selected?.exploded));
   ui.explodeBtn.textContent = selected?.exploded ? "Remontar" : "Explodir";
+
+  // "Associar" só aparece quando há de fato o que associar: o quadro só tem
+  // disjuntores, que são fonte e não se penduram em ninguém.
+  ui.assocBtn.hidden = !selected?.associable;
+  associableId = selected?.associable ?? null;
+  ui.moveBtn.hidden = !selected;
+  if (!selected) {
+    ui.movePad.hidden = true;
+    ui.moveBtn.classList.remove("is-on");
+  }
+
+  // Traçar eletroduto precisa de dois elementos para ligar.
+  ui.conduitBtn.hidden = (state?.count ?? 0) < 2;
+  ui.conduitBtn.classList.toggle("is-on", Boolean(state?.conduit));
+  ui.conduitBtn.textContent = state?.conduit ? "Cancelar" : "Eletroduto";
+
+  renderAssociation(state?.association ?? null);
+}
+
+/** Menu "a que isto responde?", montado a partir do modelo elétrico. */
+function renderAssociation(assoc) {
+  ui.assoc.hidden = !assoc;
+  ui.assocBtn.classList.toggle("is-on", Boolean(assoc));
+  if (!assoc) return;
+
+  ui.assocTitle.textContent =
+    assoc.kind === "switch"
+      ? `${assoc.label}: comandada por qual interruptor?`
+      : `${assoc.label}: em qual disjuntor?`;
+
+  ui.assocItems.replaceChildren();
+  if (!assoc.options.length) {
+    const empty = document.createElement("p");
+    empty.className = "catalog-empty";
+    empty.textContent =
+      assoc.kind === "switch"
+        ? "Nenhum interruptor na instalação ainda."
+        : "Nenhum disjuntor na instalação ainda.";
+    ui.assocItems.append(empty);
+  }
+  for (const option of assoc.options) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "catalog-item";
+    button.dataset.circuitId = option.id;
+    button.classList.toggle("is-current", option.id === assoc.current);
+    button.textContent = option.label;
+    button.addEventListener("click", () => experience?.chooseAssociation(option.id));
+    ui.assocItems.append(button);
+  }
+  ui.assocNone.hidden = !assoc.current;
 }
 
 function showMessage(text) {
@@ -153,6 +216,11 @@ async function startAR() {
       ui.addBtn.hidden = true;
       ui.addBtn.classList.remove("is-on");
       ui.removeBtn.hidden = true;
+      ui.assocBtn.hidden = true;
+      ui.conduitBtn.hidden = true;
+      ui.moveBtn.hidden = true;
+      ui.movePad.hidden = true;
+      ui.assoc.hidden = true;
       closeCatalog();
       ui.explodeBtn.hidden = true;
       ui.explodeBtn.classList.remove("is-on");
@@ -168,6 +236,11 @@ async function startAR() {
   ui.repositionBtn.hidden = true;
   ui.addBtn.hidden = true;
   ui.removeBtn.hidden = true;
+  ui.assocBtn.hidden = true;
+  ui.conduitBtn.hidden = true;
+  ui.moveBtn.hidden = true;
+  ui.movePad.hidden = true;
+  ui.assoc.hidden = true;
   ui.explodeBtn.hidden = true;
   ui.scaleControl.hidden = true;
   ui.scaleRange.value = String(scaleToSlider(1));
@@ -215,6 +288,11 @@ function wireUi() {
     ui.repositionBtn.hidden = true;
     ui.addBtn.hidden = true;
     ui.removeBtn.hidden = true;
+    ui.assocBtn.hidden = true;
+    ui.conduitBtn.hidden = true;
+    ui.moveBtn.hidden = true;
+    ui.movePad.hidden = true;
+    ui.assoc.hidden = true;
     ui.explodeBtn.hidden = true;
     ui.explodeBtn.classList.remove("is-on");
     ui.scaleControl.hidden = true;
@@ -256,6 +334,30 @@ function wireUi() {
   });
   ui.catalogClose.addEventListener("click", closeCatalog);
   ui.removeBtn.addEventListener("click", () => experience?.removeSelected());
+
+  // O botão sabe qual circuito abrir porque só aparece quando o elemento
+  // selecionado tem exatamente um associável.
+  ui.assocBtn.addEventListener("click", () => experience?.openAssociation(associableId));
+  ui.conduitBtn.addEventListener("click", () => {
+    if (ui.conduitBtn.classList.contains("is-on")) experience?.cancelConduit("");
+    else experience?.startConduit();
+  });
+  ui.assocClose.addEventListener("click", () => experience?.openAssociation(null));
+  ui.assocNone.addEventListener("click", () => experience?.chooseAssociation(null));
+
+  ui.moveBtn.addEventListener("click", () => {
+    const open = ui.movePad.hidden;
+    ui.movePad.hidden = !open;
+    ui.moveBtn.classList.toggle("is-on", open);
+  });
+
+  // Passo de 5 cm: fino o bastante para encostar uma tomada na parede, grosso
+  // o bastante para atravessar um cômodo sem cansar o polegar.
+  for (const button of ui.movePad.querySelectorAll(".btn-nudge")) {
+    button.addEventListener("click", () => {
+      experience?.nudge(button.dataset.axis, Number(button.dataset.dir) * NUDGE_METERS);
+    });
+  }
 }
 
 function openCatalog() {

@@ -17,6 +17,7 @@ const ROWS = [
   ["state", "STATE"],
   ["rollDelta", "ROLL Δ"],
   ["fps", "FPS"],
+  ["erro", "ERRO"],
 ];
 
 const UPDATE_INTERVAL_MS = 250;

@@ -243,10 +243,17 @@ export class ARExperience {
       this.onHandDetected?.();
     }
     if (state === HAND_STATE.OBJECT_SELECTED) {
-      this.setSelected(true);
-      this.gestures?.setTarget(null);
+      // O elemento é o que a PINÇA agarrou — não um booleano. Passar `true`
+      // aqui gravava `true` como seleção da cena, e o reportScene seguinte
+      // estourava em `element.root.position` dentro do loop de renderização:
+      // o frame não chegava a desenhar e a seleção ficava corrompida, deixando
+      // toque e mão sem alvo até o fim da sessão.
+      const grabbed = this.scene3d?.ownerOf(this.handController?.target ?? null) ?? null;
+      if (grabbed) this.setSelected(grabbed);
+      this.gestures?.setTarget(null); // enquanto a mão segura, o toque não escreve
     } else if (state === HAND_STATE.RELEASED || state === HAND_STATE.IDLE) {
-      if (this.selected) this.gestures?.setTarget(this.selectedElement.root);
+      const element = this.selectedElement;
+      if (element) this.gestures?.setTarget(element.root);
     }
   }
 
@@ -752,58 +759,72 @@ export class ARExperience {
     this.lastFrameTime = time;
 
     if (frame) {
-      const view = frame.getViewerPose(this.referenceSpace)?.views?.[0] ?? null;
-
-      if (this.awaitingPlacement) {
-        // O hit-test só é consultado enquanto há algo a posicionar.
-        const results = this.hitTestSource ? frame.getHitTestResults(this.hitTestSource) : [];
-        const pose = results[0]?.getPose(this.referenceSpace);
-        this.reticle.visible = Boolean(pose);
-        if (pose) {
-          this.reticle.matrix.fromArray(pose.transform.matrix);
-          if (this.placementRequested) this.place(results[0], pose);
-        }
-
-        // A colocação pode ter acontecido nesta mesma passada (placementRequested):
-        // nesse caso o texto já foi definido por place(), e não deve ser sobrescrito.
-        if (this.awaitingPlacement) {
-          this.placementGuide.update(
-            frame,
-            this.referenceSpace,
-            view?.transform?.position ?? null,
-            pose?.transform?.position ?? null
-          );
-          const hint = this.placementGuide.hint(Boolean(pose));
-          this.onStatus(hint ?? "Toque para posicionar");
-        }
-      } else {
-        if (this.anchor) {
-          // A âncora é reajustada pelo ARCore conforme o mapa do ambiente evolui.
-          const anchorPose = frame.getPose(this.anchor.anchorSpace, this.referenceSpace);
-          if (anchorPose) {
-            const p = anchorPose.transform.position;
-            this.anchorGroup.position.set(p.x, p.y, p.z);
-          }
-        }
-        this.gestures?.update(delta);
-        this.updateHand(view, time, delta);
-        this.scene3d?.update(delta);
-        this.applyInputTargets(); // a porta pode ter acabado de abrir/fechar
-        this.reportScale();
-      }
-
-      this.cpuOcclusion?.update(frame, view, this.getXRCamera(), this.renderer);
-
-      // A textura de profundidade só chega alguns frames depois do início.
-      if (!this.occlusionLive && isOcclusionLive(this.renderer, this.cpuOcclusion)) {
-        this.occlusionLive = true;
-        this.onDepthStatus?.({ ...this.depthStatus, active: true, live: true });
+      try {
+        this.updateFrame(frame, time, delta);
+      } catch (error) {
+        // Uma exceção aqui interrompia o frame ANTES do render: a imagem
+        // congelava e o aparelho parecia travado, sem nada na tela dizendo o
+        // porquê. Degradar para "este frame não atualizou" mantém a AR viva e
+        // deixa o erro visível no console e no painel de diagnóstico.
+        this.frameError = error.message;
+        console.error("[AR] falha no frame:", error);
       }
     }
 
     this.fps.tick(delta);
     this.reportDiagnostics(time);
     this.renderer.render(this.scene, this.camera);
+  }
+
+  /** Tudo o que o frame atualiza antes de desenhar. Ver render(). */
+  updateFrame(frame, time, delta) {
+    const view = frame.getViewerPose(this.referenceSpace)?.views?.[0] ?? null;
+
+    if (this.awaitingPlacement) {
+      // O hit-test só é consultado enquanto há algo a posicionar.
+      const results = this.hitTestSource ? frame.getHitTestResults(this.hitTestSource) : [];
+      const pose = results[0]?.getPose(this.referenceSpace);
+      this.reticle.visible = Boolean(pose);
+      if (pose) {
+        this.reticle.matrix.fromArray(pose.transform.matrix);
+        if (this.placementRequested) this.place(results[0], pose);
+      }
+
+      // A colocação pode ter acontecido nesta mesma passada (placementRequested):
+      // nesse caso o texto já foi definido por place(), e não deve ser sobrescrito.
+      if (this.awaitingPlacement) {
+        this.placementGuide.update(
+          frame,
+          this.referenceSpace,
+          view?.transform?.position ?? null,
+          pose?.transform?.position ?? null
+        );
+        const hint = this.placementGuide.hint(Boolean(pose));
+        this.onStatus(hint ?? "Toque para posicionar");
+      }
+    } else {
+      if (this.anchor) {
+        // A âncora é reajustada pelo ARCore conforme o mapa do ambiente evolui.
+        const anchorPose = frame.getPose(this.anchor.anchorSpace, this.referenceSpace);
+        if (anchorPose) {
+          const p = anchorPose.transform.position;
+          this.anchorGroup.position.set(p.x, p.y, p.z);
+        }
+      }
+      this.gestures?.update(delta);
+      this.updateHand(view, time, delta);
+      this.scene3d?.update(delta);
+      this.applyInputTargets(); // a porta pode ter acabado de abrir/fechar
+      this.reportScale();
+    }
+
+    this.cpuOcclusion?.update(frame, view, this.getXRCamera(), this.renderer);
+
+    // A textura de profundidade só chega alguns frames depois do início.
+    if (!this.occlusionLive && isOcclusionLive(this.renderer, this.cpuOcclusion)) {
+      this.occlusionLive = true;
+      this.onDepthStatus?.({ ...this.depthStatus, active: true, live: true });
+    }
   }
 
   /**
@@ -863,6 +884,8 @@ export class ARExperience {
             ? `${this.handController.rollDeltaDeg.toFixed(1)}°`
             : "—",
         fps: this.fps.value,
+        // Última exceção engolida pelo loop de frames — "—" enquanto tudo vai bem.
+        erro: this.frameError ?? "—",
       },
       time
     );
